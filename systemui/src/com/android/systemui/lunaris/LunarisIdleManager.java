@@ -32,11 +32,11 @@ import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.media.AudioManager;
 import android.net.Uri;
-import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
@@ -65,26 +65,13 @@ public class LunarisIdleManager {
     private static final String TAG = "LunarisIdleManager";
 
     private static final String ACTION_SCAN = "com.android.systemui.lunaris.ACTION_IDLE_SCAN";
-    private static final String ACTION_HALT = "com.android.systemui.lunaris.ACTION_IDLE_HALT";
-
     private static final int PI_SCAN_REQUEST = 0x4C494D01;
-    private static final int PI_HALT_REQUEST = 0x4C494D02;
 
     public static final long IDLE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(15);
 
-    private static final long ALARM_BUFFER_MS = TimeUnit.MINUTES.toMillis(15);
     private static final long MIN_DELAY_MS = 100L;
-
-    private static final long SCAN_INTERVAL_CHARGING_MS = TimeUnit.MINUTES.toMillis(10);
-    private static final long SCAN_INTERVAL_HIGH_MS = TimeUnit.MINUTES.toMillis(15);
-    private static final long SCAN_INTERVAL_MS = TimeUnit.MINUTES.toMillis(20);
-    private static final long SCAN_INTERVAL_LOW_MS = TimeUnit.MINUTES.toMillis(30);
-
     private static final long INITIAL_SCAN_DELAY_MS = TimeUnit.SECONDS.toMillis(30);
-    private static final long SCAN_DEBOUNCE_MS = TimeUnit.SECONDS.toMillis(10);
-
-    private static final int BATTERY_LOW_THRESHOLD = 15;
-    private static final int BATTERY_HIGH_THRESHOLD = 35;
+    private static final long FINAL_SCAN_MARGIN_MS = TimeUnit.SECONDS.toMillis(1);
 
     public static final int STANDBY_BUCKET_ACTIVE = 10;
     public static final int STANDBY_BUCKET_WORKING_SET = 20;
@@ -92,7 +79,9 @@ public class LunarisIdleManager {
     public static final int STANDBY_BUCKET_RARE = 40;
     public static final int STANDBY_BUCKET_RESTRICTED = 45;
 
-    private volatile long mLastScanStartMs = 0L;
+    private volatile long mCycleStartedElapsedMs;
+    private volatile int mCycleGeneration;
+    private volatile int mScansCompleted;
 
     public enum IdleAction {
         STANDBY_BUCKET_RARE,
@@ -205,18 +194,9 @@ public class LunarisIdleManager {
     private final Map<String, AppIdleState> mAppIdleStates = new ConcurrentHashMap<>();
     private final Map<String, Long> mLastKillTime = new ConcurrentHashMap<>();
 
-    private volatile int mBatteryLevel = 100;
-    private volatile boolean mIsCharging = false;
-
-    private volatile boolean mHasScanCompleted = false;
-    private int mHaltRetries = 0;
-
-    private BroadcastReceiver mBatteryReceiver;
     private BroadcastReceiver mAlarmReceiver;
-    private BroadcastReceiver mDozeReceiver;
     private ContentObserver mSettingsObserver;
     private UidObserver mUidObserver;
-    private Runnable mHaltRunnable;
     private volatile boolean mIsRunning = false;
 
     private PowerManager.WakeLock mScanWakeLock;
@@ -243,11 +223,8 @@ public class LunarisIdleManager {
         registerUidObserver();
         reconcileFullKillPackages();
         registerSettingsObserver();
-        registerBatteryReceiver();
         registerAlarmReceiver();
-        registerDozeReceiver();
         initScanWakeLock();
-        initRunnables();
     }
 
     public static void initManager(@NonNull Context context) {
@@ -277,30 +254,16 @@ public class LunarisIdleManager {
             return;
         }
         mIsRunning = true;
-        mHasScanCompleted = false;
-        mHaltRetries = 0;
+        mCycleGeneration++;
+        mScansCompleted = 0;
+        mCycleStartedElapsedMs = SystemClock.elapsedRealtime();
         cancelCallbacks();
 
         Log.d(TAG, "executeManager: appCount=" + mAppConfigCache.size()
                 + " enabled=" + mEnabled);
 
-        long timeUntilAlarm = getMillisUntilNextAlarm();
-        long firstDelay;
-
-        if (timeUntilAlarm > 0 && timeUntilAlarm < IDLE_TIMEOUT_MS) {
-            firstDelay = MIN_DELAY_MS;
-            Log.d(TAG, "Alarm soon — scheduling immediate scan");
-        } else {
-            firstDelay = INITIAL_SCAN_DELAY_MS;
-            Log.d(TAG, "First scan in "
-                    + TimeUnit.MILLISECONDS.toSeconds(firstDelay) + " sec");
-        }
-
-        scheduleScanAlarm(firstDelay);
-
-        if (timeUntilAlarm > ALARM_BUFFER_MS) {
-            scheduleHaltAlarm(timeUntilAlarm - ALARM_BUFFER_MS);
-        }
+        Log.d(TAG, "First scan in 30 sec; final scan after 15 min");
+        scheduleScanAlarm(INITIAL_SCAN_DELAY_MS);
     }
 
     public void haltManager() {
@@ -308,6 +271,7 @@ public class LunarisIdleManager {
         Log.d(TAG, "Halting LunarisIdleManager");
         cancelCallbacks();
         mIsRunning = false;
+        mCycleGeneration++;
         restoreAllBuckets();
     }
 
@@ -316,8 +280,6 @@ public class LunarisIdleManager {
         mDestroyed = true;
         unregisterSettingsObserver();
         unregisterUidObserver();
-        unregisterBatteryReceiver();
-        unregisterDozeReceiver();
         unregisterAlarmReceiver();
         releaseWakeLockIfHeld();
         synchronized (sLock) { sInstance = null; }
@@ -442,9 +404,10 @@ public class LunarisIdleManager {
                 mContext, PI_SCAN_REQUEST,
                 new Intent(ACTION_SCAN),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        long triggerAt = System.currentTimeMillis() + Math.max(delayMs, MIN_DELAY_MS);
-        mAlarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
-        Log.d(TAG, "Scan alarm set in " + TimeUnit.MILLISECONDS.toMinutes(delayMs) + " min");
+        long triggerAt = SystemClock.elapsedRealtime() + Math.max(delayMs, MIN_DELAY_MS);
+        mAlarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+        Log.d(TAG, "Scan alarm set in " + TimeUnit.MILLISECONDS.toSeconds(delayMs) + " sec");
     }
 
     private void cancelScanAlarm() {
@@ -452,25 +415,6 @@ public class LunarisIdleManager {
         PendingIntent pi = PendingIntent.getBroadcast(
                 mContext, PI_SCAN_REQUEST,
                 new Intent(ACTION_SCAN),
-                PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
-        if (pi != null) mAlarmManager.cancel(pi);
-    }
-
-    private void scheduleHaltAlarm(long delayMs) {
-        if (mAlarmManager == null) return;
-        PendingIntent pi = PendingIntent.getBroadcast(
-                mContext, PI_HALT_REQUEST,
-                new Intent(ACTION_HALT),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        long triggerAt = System.currentTimeMillis() + Math.max(delayMs, MIN_DELAY_MS);
-        mAlarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
-    }
-
-    private void cancelHaltAlarm() {
-        if (mAlarmManager == null) return;
-        PendingIntent pi = PendingIntent.getBroadcast(
-                mContext, PI_HALT_REQUEST,
-                new Intent(ACTION_HALT),
                 PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
         if (pi != null) mAlarmManager.cancel(pi);
     }
@@ -483,14 +427,11 @@ public class LunarisIdleManager {
                 String action = intent.getAction();
                 if (ACTION_SCAN.equals(action)) {
                     onScanAlarmFired();
-                } else if (ACTION_HALT.equals(action)) {
-                    onHaltAlarmFired();
                 }
             }
         };
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_SCAN);
-        filter.addAction(ACTION_HALT);
         mContext.registerReceiver(mAlarmReceiver, filter,
                 Context.RECEIVER_NOT_EXPORTED);
     }
@@ -505,45 +446,25 @@ public class LunarisIdleManager {
 
     private void onScanAlarmFired() {
         if (!mIsRunning || mDestroyed) return;
-        long now = System.currentTimeMillis();
-        if ((now - mLastScanStartMs) < SCAN_DEBOUNCE_MS) {
-            Log.d(TAG, "onScanAlarmFired: debounced (last scan "
-                    + (now - mLastScanStartMs) + "ms ago)");
-            return;
-        }
-        mLastScanStartMs = now;
+        int cycle = mCycleGeneration;
         acquireWakeLock();
         mIoExecutor.execute(() -> {
             try {
+                if (!mIsRunning || cycle != mCycleGeneration) return;
                 performIdleScan();
-                mHasScanCompleted = true;
-                if (mIsRunning) {
-                    long interval = getDynamicScanIntervalMs();
-                    Log.d(TAG, "Next scan in "
-                            + TimeUnit.MILLISECONDS.toMinutes(interval)
-                            + " min [battery=" + mBatteryLevel
-                            + "%, charging=" + mIsCharging + "]");
-                    scheduleScanAlarm(interval);
+                if (!mIsRunning || cycle != mCycleGeneration) return;
+                if (++mScansCompleted == 1) {
+                    long elapsed = SystemClock.elapsedRealtime() - mCycleStartedElapsedMs;
+                    long remaining = IDLE_TIMEOUT_MS + FINAL_SCAN_MARGIN_MS - elapsed;
+                    scheduleScanAlarm(remaining);
+                } else {
+                    mIsRunning = false;
+                    Log.d(TAG, "Final scan complete; waiting for next screen lock");
                 }
             } finally {
                 releaseWakeLockIfHeld();
             }
         });
-    }
-
-    private void onHaltAlarmFired() {
-        if (!mIsRunning) return;
-        if (!mHasScanCompleted && mHaltRetries < 3) {
-            mHaltRetries++;
-            Log.d(TAG, "Halt deferred (attempt " + mHaltRetries + ") — scan not yet run");
-            scheduleHaltAlarm(ALARM_BUFFER_MS * 2);
-            return;
-        }
-        haltManager();
-    }
-
-    private void initRunnables() {
-        mHaltRunnable = () -> { /* no-op: halt is driven by scheduleHaltAlarm */ };
     }
 
     private void performIdleScan() {
@@ -1008,61 +929,6 @@ public class LunarisIdleManager {
             mContext.getContentResolver().unregisterContentObserver(mSettingsObserver);
     }
 
-    private void registerBatteryReceiver() {
-        mBatteryReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
-                int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS,
-                        BatteryManager.BATTERY_STATUS_UNKNOWN);
-                if (level >= 0 && scale > 0)
-                    mBatteryLevel = (int) ((level / (float) scale) * 100);
-                mIsCharging = status == BatteryManager.BATTERY_STATUS_CHARGING
-                        || status == BatteryManager.BATTERY_STATUS_FULL;
-            }
-        };
-        IntentFilter filter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
-        Intent sticky = mContext.registerReceiver(mBatteryReceiver, filter);
-        if (sticky != null) mBatteryReceiver.onReceive(mContext, sticky);
-    }
-
-    private void registerDozeReceiver() {
-        mDozeReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (!PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED.equals(intent.getAction())) {
-                    return;
-                }
-                if (mDestroyed || !mIsRunning) return;
-                boolean idle = mPowerManager != null && mPowerManager.isDeviceIdleMode();
-                Log.d(TAG, "Doze mode changed — idle=" + idle);
-                if (idle) {
-                    onScanAlarmFired();
-                }
-            }
-        };
-        IntentFilter filter = new IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
-        mContext.registerReceiver(mDozeReceiver, filter);
-    }
-
-    private void unregisterDozeReceiver() {
-        if (mDozeReceiver != null) {
-            try {
-                mContext.unregisterReceiver(mDozeReceiver);
-            } catch (IllegalArgumentException ignored) {}
-            mDozeReceiver = null;
-        }
-    }
-
-    private void unregisterBatteryReceiver() {
-        if (mBatteryReceiver != null) {
-            try { mContext.unregisterReceiver(mBatteryReceiver); }
-            catch (IllegalArgumentException ignored) {}
-            mBatteryReceiver = null;
-        }
-    }
-
     private void persistAppConfigs(@NonNull Map<String, AppConfig> configs) {
         mIoExecutor.execute(() -> {
             try {
@@ -1118,32 +984,7 @@ public class LunarisIdleManager {
         });
     }
 
-    private long getDynamicScanIntervalMs() {
-        if (mIsCharging)
-            return SCAN_INTERVAL_CHARGING_MS;
-        if (mBatteryLevel > BATTERY_HIGH_THRESHOLD)
-            return SCAN_INTERVAL_HIGH_MS;
-        if (mBatteryLevel > BATTERY_LOW_THRESHOLD)
-            return SCAN_INTERVAL_MS;
-        return SCAN_INTERVAL_LOW_MS;
-    }
-
-    private long getMillisUntilNextAlarm() {
-        if (mAlarmManager == null) return 0;
-        try {
-            AlarmManager.AlarmClockInfo info = mAlarmManager.getNextAlarmClock();
-            if (info != null)
-                return Math.max(0, info.getTriggerTime() - System.currentTimeMillis());
-        } catch (Exception e) {
-            Log.e(TAG, "Error reading next alarm", e);
-        }
-        return 0;
-    }
-
     private void cancelCallbacks() {
         cancelScanAlarm();
-        cancelHaltAlarm();
-        if (mHaltRunnable != null)
-            mMainHandler.removeCallbacks(mHaltRunnable);
     }
 }
