@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="idle_manager_title">Управление фоном</string>
+    <string name="idle_manager_title">Управление фоновой работой</string>
+    <string name="idle_manager_enabled_status">Включено</string>
+    <string name="idle_manager_disabled_status">Отключено</string>
     <string name="idle_manager_summary">Управление фоновыми процессами и расходом батареи</string>
     <string name="idle_manager_app_count">Выбрано приложений: %1$d</string>
     <string name="idle_manager_disabled">Выключено — нажмите, чтобы включить</string>
@@ -57,6 +59,12 @@
     <string name="idle_manager_no_activity_hint">Действия появятся после выключения экрана и достижения времени ожидания.</string>
     <string name="idle_manager_refresh_dashboard">Обновить</string>
     <string name="idle_manager_clear_stats_title">Очистить статистику</string>
+    <string name="idle_manager_clear_stats_short">Очистить</string>
+    <string name="idle_manager_elapsed_never">никогда</string>
+    <string name="idle_manager_elapsed_now">только что</string>
+    <string name="idle_manager_elapsed_minutes">%1$d мин назад</string>
+    <string name="idle_manager_elapsed_hours">%1$d ч назад</string>
+    <string name="idle_manager_elapsed_days">%1$d дн назад</string>
     <string name="idle_manager_clear_stats_confirm">История действий будет удалена. Управление приложениями продолжит работать.</string>
     <string name="idle_manager_sleep_mode_trigger_title">Запускать в режиме сна</string>
     <string name="idle_manager_sleep_mode_trigger_summary">Применять правила только во время режима сна</string>

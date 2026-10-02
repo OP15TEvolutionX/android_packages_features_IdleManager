@@ -285,17 +285,18 @@ private fun readEnforcementRecords(
     return records.sortedByDescending { it.lastKillMs }
 }
 
+@Composable
 private fun formatElapsed(ms: Long): String {
-    if (ms == 0L) return "never"
+    if (ms == 0L) return stringResource(R.string.idle_manager_elapsed_never)
     val elapsed = System.currentTimeMillis() - ms
     val mins = TimeUnit.MILLISECONDS.toMinutes(elapsed)
     val hrs = TimeUnit.MILLISECONDS.toHours(elapsed)
     val days = TimeUnit.MILLISECONDS.toDays(elapsed)
     return when {
-        mins < 1 -> "just now"
-        mins < 60 -> "${mins}m ago"
-        hrs < 24 -> "${hrs}h ago"
-        else -> "${days}d ago"
+        mins < 1 -> stringResource(R.string.idle_manager_elapsed_now)
+        mins < 60 -> stringResource(R.string.idle_manager_elapsed_minutes, mins)
+        hrs < 24 -> stringResource(R.string.idle_manager_elapsed_hours, hrs)
+        else -> stringResource(R.string.idle_manager_elapsed_days, days)
     }
 }
 
@@ -518,11 +519,13 @@ private fun IdleManagerRoot(ctx: Context) {
                 .padding(padding)
         ) {
             SpoofingHeaderCard(
-                title = stringResource(R.string.idle_manager_title),
-                subtitle = if (globalEnabled)
-                    stringResource(R.string.idle_manager_app_count, configuredApps.size)
-                else
-                    stringResource(R.string.idle_manager_disabled),
+                title = stringResource(
+                    if (globalEnabled) R.string.idle_manager_enabled_status
+                    else R.string.idle_manager_disabled_status
+                ),
+                subtitle = stringResource(
+                    R.string.idle_manager_app_count, configuredApps.size
+                ),
                 checked = globalEnabled,
                 onCheckedChange = { v ->
                     globalEnabled = v
@@ -752,7 +755,6 @@ private fun DashboardTab(
             StatCard(
                 label = stringResource(R.string.idle_manager_apps_acted_on),
                 value = records.size.toString(),
-                icon = Icons.Default.Apps,
                 modifier = Modifier.weight(1f)
             )
             StatCard(
@@ -760,7 +762,6 @@ private fun DashboardTab(
                 value = records.sumOf {
                     it.killCount
                 }.toString(),
-                icon = Icons.Default.FlashOn,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -811,7 +812,7 @@ private fun DashboardTab(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        stringResource(R.string.action_clear),
+                        stringResource(R.string.idle_manager_clear_stats_short),
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -850,7 +851,6 @@ private fun DashboardTab(
 private fun StatCard(
     label: String,
     value: String,
-    icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -860,23 +860,20 @@ private fun StatCard(
             containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                icon, null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(Modifier.height(4.dp))
             Text(
                 value,
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                textAlign = TextAlign.Center
             )
             Text(
                 label,
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
