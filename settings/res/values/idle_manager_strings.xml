@@ -28,6 +28,8 @@
     <string name="idle_manager_policy_aggressive_desc">Act on apps idle for 15 minutes. Recommended for battery savings.</string>
     <string name="idle_manager_policy_custom_desc">Set your own idle timeout.</string>
     <string name="idle_manager_timeout_minutes">Timeout: %1$d min</string>
+    <string name="idle_manager_timeout_min">1 min</string>
+    <string name="idle_manager_timeout_max">240 min</string>
     <string name="idle_manager_timeout_label">Timeout</string>
     <string name="idle_manager_policy_label">Policy</string>
     <string name="idle_manager_enforcement_action">Enforcement action</string>

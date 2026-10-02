@@ -68,8 +68,8 @@ public class LunarisIdleManager {
     private static final String SYSTEMUI_PERMISSION = "com.android.systemui.permission.SELF";
     private static final int PI_SCAN_REQUEST = 0x4C494D01;
 
-    private static final int MIN_CUSTOM_TIMEOUT_MINUTES = 5;
-    private static final int MAX_CUSTOM_TIMEOUT_MINUTES = 240;
+    private static final int MIN_TIMEOUT_MINUTES = 1;
+    private static final int MAX_TIMEOUT_MINUTES = 240;
 
     private static final long MIN_DELAY_MS = 100L;
     private static final long INITIAL_SCAN_DELAY_MS = TimeUnit.SECONDS.toMillis(30);
@@ -901,37 +901,34 @@ public class LunarisIdleManager {
                 Log.w(TAG, "Unable to migrate legacy app timeout", e);
             }
         }
-        if (policy == null) {
-            policy = legacyPolicy == null ? "BALANCED" : legacyPolicy;
-            Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, policy);
-            if (Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT) == null) {
-                Settings.Secure.putInt(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT,
-                        Math.max(MIN_CUSTOM_TIMEOUT_MINUTES,
-                                Math.min(MAX_CUSTOM_TIMEOUT_MINUTES, legacyMinutes)));
-            }
+        String effectivePolicy = policy == null
+                ? (legacyPolicy == null ? "BALANCED" : legacyPolicy) : policy;
+        String saved = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT);
+        int savedMinutes;
+        try {
+            savedMinutes = saved == null ? legacyMinutes : Integer.parseInt(saved);
+        } catch (NumberFormatException e) {
+            savedMinutes = legacyMinutes;
         }
-
         int minutes;
-        switch (policy) {
+        switch (effectivePolicy) {
             case "AGGRESSIVE":
                 minutes = 15;
                 break;
             case "CUSTOM":
-                String saved = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT);
-                try {
-                    minutes = saved == null ? legacyMinutes : Integer.parseInt(saved);
-                } catch (NumberFormatException e) {
-                    minutes = 30;
-                }
-                minutes = Math.max(MIN_CUSTOM_TIMEOUT_MINUTES,
-                        Math.min(MAX_CUSTOM_TIMEOUT_MINUTES, minutes));
+                minutes = savedMinutes;
                 break;
             default:
                 minutes = 60;
                 break;
         }
+        minutes = Math.max(MIN_TIMEOUT_MINUTES, Math.min(MAX_TIMEOUT_MINUTES, minutes));
+        if (!"CUSTOM".equals(policy) || saved == null || savedMinutes != minutes) {
+            Settings.Secure.putInt(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT, minutes);
+            Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, "CUSTOM");
+        }
         mIdleTimeoutMs = TimeUnit.MINUTES.toMillis(minutes);
-        Log.d(TAG, "Global timeout: policy=" + policy + " minutes=" + minutes);
+        Log.d(TAG, "Global timeout: minutes=" + minutes);
     }
 
     private void loadConfigFromSettings() {

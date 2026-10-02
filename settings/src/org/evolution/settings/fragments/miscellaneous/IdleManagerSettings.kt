@@ -15,10 +15,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,7 +42,6 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -67,8 +64,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -78,8 +73,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -113,16 +106,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-
-internal enum class IdlePolicy {
-    BALANCED, AGGRESSIVE, CUSTOM;
-
-    companion object {
-        fun fromString(v: String) = entries.firstOrNull {
-            it.name == v
-            } ?: BALANCED
-    }
-}
+import kotlin.math.roundToInt
 
 internal enum class IdleAction {
     STANDBY_BUCKET_RARE,
@@ -173,8 +157,7 @@ private data class IdleAppConfig(
 )
 
 private data class IdleGlobalConfig(
-    val policy: IdlePolicy,
-    val customMinutes: Int
+    val timeoutMinutes: Int
 )
 
 private data class EnforcementRecord(
@@ -199,7 +182,7 @@ private fun writeEnabled(ctx: Context, v: Boolean) =
 private fun readGlobalConfig(ctx: Context): IdleGlobalConfig {
     val cr = ctx.contentResolver
     val savedPolicy = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_POLICY)
-    var legacyPolicy = IdlePolicy.BALANCED
+    var legacyPolicy = "BALANCED"
     var legacyMinutes = 30
     if (savedPolicy == null) {
         runCatching {
@@ -208,20 +191,25 @@ private fun readGlobalConfig(ctx: Context): IdleGlobalConfig {
             )
             if (apps.length() > 0) {
                 val first = apps.getJSONObject(0)
-                legacyPolicy = IdlePolicy.fromString(first.optString("policy", "BALANCED"))
+                legacyPolicy = first.optString("policy", "BALANCED")
                 legacyMinutes = first.optInt("timeout_minutes", 30)
             }
         }
     }
-    val policy = savedPolicy?.let(IdlePolicy::fromString) ?: legacyPolicy
-    val minutes = Settings.Secure.getInt(
+    val policy = savedPolicy ?: legacyPolicy
+    val savedMinutes = Settings.Secure.getInt(
         cr, Settings.Secure.IDLE_MANAGER_TIMEOUT, legacyMinutes
-    ).coerceIn(5, 240)
-    if (savedPolicy == null) {
-        Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, policy.name)
+    )
+    val minutes = when (policy) {
+        "BALANCED" -> 60
+        "AGGRESSIVE" -> 15
+        else -> savedMinutes
+    }.coerceIn(1, 240)
+    if (savedPolicy != "CUSTOM") {
         Settings.Secure.putInt(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT, minutes)
+        Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, "CUSTOM")
     }
-    return IdleGlobalConfig(policy, minutes)
+    return IdleGlobalConfig(minutes)
 }
 
 private fun readAppConfigs(ctx: Context): LinkedHashMap<String, IdleAppConfig> {
@@ -344,8 +332,7 @@ private fun IdleManagerRoot(ctx: Context) {
     var allApps by remember { mutableStateOf(listOf<IdleAppItem>()) }
     var configuredApps by remember { mutableStateOf(linkedMapOf<String, IdleAppConfig>()) }
     var globalEnabled by remember { mutableStateOf(true) }
-    var globalPolicy by remember { mutableStateOf(IdlePolicy.BALANCED) }
-    var globalCustomMinutes by remember { mutableIntStateOf(30) }
+    var globalTimeoutMinutes by remember { mutableIntStateOf(60) }
     var records by remember { mutableStateOf(listOf<EnforcementRecord>()) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -379,8 +366,7 @@ private fun IdleManagerRoot(ctx: Context) {
             val globalConfig = withContext(Dispatchers.IO) { readGlobalConfig(ctx) }
             val raw = withContext(Dispatchers.IO) { readAppConfigs(ctx) }
             globalEnabled = enabled
-            globalPolicy = globalConfig.policy
-            globalCustomMinutes = globalConfig.customMinutes
+            globalTimeoutMinutes = globalConfig.timeoutMinutes
             configuredApps = mergeWithAppInfo(raw, allApps)
             refreshRecords()
         }
@@ -400,17 +386,8 @@ private fun IdleManagerRoot(ctx: Context) {
         })
     }
 
-    fun savePolicy(policy: IdlePolicy) {
-        globalPolicy = policy
-        scope.launch(Dispatchers.IO) {
-            Settings.Secure.putString(
-                ctx.contentResolver, Settings.Secure.IDLE_MANAGER_POLICY, policy.name
-            )
-        }
-    }
-
-    fun saveCustomMinutes(minutes: Int) {
-        globalCustomMinutes = minutes
+    fun saveTimeoutMinutes(minutes: Int) {
+        globalTimeoutMinutes = minutes
         scope.launch(Dispatchers.IO) {
             Settings.Secure.putInt(
                 ctx.contentResolver, Settings.Secure.IDLE_MANAGER_TIMEOUT, minutes
@@ -551,7 +528,7 @@ private fun IdleManagerRoot(ctx: Context) {
                     globalEnabled = v
                     scope.launch(Dispatchers.IO) { writeEnabled(ctx, v) }
                 },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
             ) {
                 Icon(
                     Icons.Default.BatteryAlert,
@@ -564,33 +541,25 @@ private fun IdleManagerRoot(ctx: Context) {
 
             SpoofingAnimatedVisibility(visible = globalEnabled) {
                 Column {
-                    TabRow(
-                        selectedTabIndex = selectedTab,
-                        modifier = Modifier.padding(horizontal = 16.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Tab(
+                        IdlePageSelector(
+                            title = stringResource(R.string.idle_manager_tab_apps),
                             selected = selectedTab == 0,
-                            onClick = {
-                                selectedTab = 0
-                            },
-                            text = {
-                                Text(stringResource(R.string.idle_manager_tab_apps))
-                            },
-                            icon = {
-                                Icon(Icons.Default.Apps, null)
-                            }
+                            modifier = Modifier.weight(1f),
+                            onClick = { selectedTab = 0 }
                         )
-                        Tab(
+                        IdlePageSelector(
+                            title = stringResource(R.string.idle_manager_tab_dashboard),
                             selected = selectedTab == 1,
+                            modifier = Modifier.weight(1f),
                             onClick = {
                                 selectedTab = 1
                                 refreshRecords()
-                            },
-                            text = {
-                                Text(stringResource(R.string.idle_manager_tab_dashboard))
-                            },
-                            icon = {
-                                Icon(Icons.Default.Dashboard, null)
                             }
                         )
                     }
@@ -610,10 +579,8 @@ private fun IdleManagerRoot(ctx: Context) {
                         when (tab) {
                             0 -> AppsTab(
                                 configuredApps = configuredApps,
-                                policy = globalPolicy,
-                                customMinutes = globalCustomMinutes,
-                                onPolicyChange = { savePolicy(it) },
-                                onCustomMinutesChange = { saveCustomMinutes(it) },
+                                timeoutMinutes = globalTimeoutMinutes,
+                                onTimeoutChange = { saveTimeoutMinutes(it) },
                                 onAdd = {
                                     showAddDialog = true
                                 },
@@ -648,10 +615,8 @@ private fun IdleManagerRoot(ctx: Context) {
 @Composable
 private fun AppsTab(
     configuredApps: LinkedHashMap<String, IdleAppConfig>,
-    policy: IdlePolicy,
-    customMinutes: Int,
-    onPolicyChange: (IdlePolicy) -> Unit,
-    onCustomMinutesChange: (Int) -> Unit,
+    timeoutMinutes: Int,
+    onTimeoutChange: (Int) -> Unit,
     onAdd: () -> Unit,
     onClearAll: () -> Unit,
     onEdit: (IdleAppConfig) -> Unit,
@@ -665,10 +630,8 @@ private fun AppsTab(
             .padding(horizontal = 16.dp)
     ) {
         GlobalPolicyCard(
-            policy = policy,
-            customMinutes = customMinutes,
-            onPolicyChange = onPolicyChange,
-            onCustomMinutesChange = onCustomMinutesChange
+            timeoutMinutes = timeoutMinutes,
+            onTimeoutChange = onTimeoutChange
         )
 
         Spacer(Modifier.height(12.dp))
@@ -724,7 +687,7 @@ private fun AppsTab(
             }
         }
 
-        Spacer(Modifier.height(110.dp))
+        Spacer(Modifier.height(96.dp))
     }
 }
 
@@ -866,7 +829,7 @@ private fun DashboardTab(
         } else {
             records.forEach { rec ->
                 EnforcementRecordCard(record = rec)
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
             }
         }
 
@@ -879,7 +842,7 @@ private fun DashboardTab(
             Text(stringResource(R.string.idle_manager_refresh_dashboard))
         }
 
-        Spacer(Modifier.height(85.dp))
+        Spacer(Modifier.height(96.dp))
     }
 }
 
@@ -897,7 +860,7 @@ private fun StatCard(
             containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
@@ -1552,18 +1515,44 @@ private fun EditAppDialog(
 }
 
 @Composable
-private fun GlobalPolicyCard(
-    policy: IdlePolicy,
-    customMinutes: Int,
-    onPolicyChange: (IdlePolicy) -> Unit,
-    onCustomMinutesChange: (Int) -> Unit
+private fun IdlePageSelector(
+    title: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
 ) {
-    var sliderMinutes by remember(customMinutes) {
-        mutableFloatStateOf(customMinutes.toFloat().coerceIn(5f, 240f))
+    Surface(
+        modifier = modifier.height(48.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                title,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun GlobalPolicyCard(
+    timeoutMinutes: Int,
+    onTimeoutChange: (Int) -> Unit
+) {
+    var sliderMinutes by remember(timeoutMinutes) {
+        mutableFloatStateOf(timeoutMinutes.toFloat().coerceIn(1f, 240f))
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
@@ -1573,86 +1562,49 @@ private fun GlobalPolicyCard(
             fontWeight = FontWeight.Bold
         )
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IdlePolicy.entries.forEach { pol ->
-                FilterChip(
-                    selected = policy == pol,
-                    onClick = { onPolicyChange(pol) },
-                    label = {
-                        Text(
-                            policyDisplayName(pol),
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                    ),
-                    leadingIcon = if (policy == pol) {
-                        {
-                            Icon(Icons.Default.Check, null, Modifier.size(16.dp))
-                        }
-                    } else null
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                stringResource(R.string.idle_manager_timeout_label),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Text(
+                    stringResource(R.string.idle_manager_timeout_minutes, sliderMinutes.roundToInt()),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
-
-        AnimatedVisibility(
-            visible = policy == IdlePolicy.CUSTOM,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
+        Slider(
+            value = sliderMinutes,
+            onValueChange = { sliderMinutes = it },
+            onValueChangeFinished = { onTimeoutChange(sliderMinutes.roundToInt()) },
+            valueRange = 1f..240f,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.idle_manager_timeout_label),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            formatMinutes(sliderMinutes.toInt()),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                Slider(
-                    value = sliderMinutes,
-                    onValueChange = { sliderMinutes = it },
-                    onValueChangeFinished = {
-                        onCustomMinutesChange(sliderMinutes.toInt())
-                    },
-                    valueRange = 5f..240f,
-                    steps = 46,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "5 min",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "4 hours",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+            Text(
+                stringResource(R.string.idle_manager_timeout_min),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(R.string.idle_manager_timeout_max),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         Surface(
@@ -1660,18 +1612,11 @@ private fun GlobalPolicyCard(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ) {
             Text(
-                text = when (policy) {
-                    IdlePolicy.BALANCED   ->
-                        stringResource(R.string.idle_manager_policy_balanced_desc)
-                    IdlePolicy.AGGRESSIVE ->
-                        stringResource(R.string.idle_manager_policy_aggressive_desc)
-                    IdlePolicy.CUSTOM     ->
-                        stringResource(
-                            R.string.idle_manager_policy_custom_desc_dynamic,
-                            sliderMinutes.toInt()
-                        )
-                },
-                modifier = Modifier.padding(10.dp),
+                text = stringResource(
+                    R.string.idle_manager_policy_custom_desc_dynamic,
+                    sliderMinutes.roundToInt()
+                ),
+                modifier = Modifier.padding(12.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1773,13 +1718,6 @@ private fun actionColor(action: IdleAction): Color = when (action) {
 }
 
 @Composable
-private fun policyDisplayName(policy: IdlePolicy): String = when (policy) {
-    IdlePolicy.BALANCED -> stringResource(R.string.idle_manager_policy_balanced)
-    IdlePolicy.AGGRESSIVE -> stringResource(R.string.idle_manager_policy_aggressive)
-    IdlePolicy.CUSTOM -> stringResource(R.string.idle_manager_policy_custom)
-}
-
-@Composable
 private fun actionDisplayName(action: IdleAction): String = when (action) {
     IdleAction.STANDBY_BUCKET_RARE -> stringResource(R.string.idle_action_rare_bucket)
     IdleAction.STANDBY_BUCKET_RESTRICTED -> stringResource(R.string.idle_action_restricted)
@@ -1793,11 +1731,4 @@ private fun actionDescription(action: IdleAction): String = when (action) {
     IdleAction.STANDBY_BUCKET_RESTRICTED -> stringResource(R.string.idle_action_restricted_desc)
     IdleAction.KILL_BACKGROUND -> stringResource(R.string.idle_action_kill_bg_desc)
     IdleAction.FULL_KILL -> stringResource(R.string.idle_action_full_kill_desc)
-}
-
-private fun formatMinutes(mins: Int): String = when {
-    mins < 60 -> "$mins min"
-    mins == 60 -> "1 hour"
-    mins % 60 == 0 -> "${mins / 60} hours"
-    else -> "${mins / 60}h ${mins % 60}m"
 }
