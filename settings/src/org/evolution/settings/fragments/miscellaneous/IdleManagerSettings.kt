@@ -117,13 +117,6 @@ import java.util.concurrent.TimeUnit
 internal enum class IdlePolicy {
     BALANCED, AGGRESSIVE, CUSTOM;
 
-    val defaultMinutes: Int
-        get() = when (this) {
-            BALANCED -> 60
-            AGGRESSIVE -> 15
-            CUSTOM -> 30
-        }
-
     companion object {
         fun fromString(v: String) = entries.firstOrNull {
             it.name == v
@@ -176,9 +169,12 @@ private data class IdleAppConfig(
     val label: String,
     val icon: Drawable?,
     val isSystem: Boolean,
-    val policy: IdlePolicy,
-    val customTimeoutMinutes: Int,
     val action: IdleAction
+)
+
+private data class IdleGlobalConfig(
+    val policy: IdlePolicy,
+    val customMinutes: Int
 )
 
 private data class EnforcementRecord(
@@ -200,6 +196,34 @@ private fun writeEnabled(ctx: Context, v: Boolean) =
         if (v) 1 else 0
     )
 
+private fun readGlobalConfig(ctx: Context): IdleGlobalConfig {
+    val cr = ctx.contentResolver
+    val savedPolicy = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_POLICY)
+    var legacyPolicy = IdlePolicy.BALANCED
+    var legacyMinutes = 30
+    if (savedPolicy == null) {
+        runCatching {
+            val apps = JSONArray(
+                Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_APPS) ?: "[]"
+            )
+            if (apps.length() > 0) {
+                val first = apps.getJSONObject(0)
+                legacyPolicy = IdlePolicy.fromString(first.optString("policy", "BALANCED"))
+                legacyMinutes = first.optInt("timeout_minutes", 30)
+            }
+        }
+    }
+    val policy = savedPolicy?.let(IdlePolicy::fromString) ?: legacyPolicy
+    val minutes = Settings.Secure.getInt(
+        cr, Settings.Secure.IDLE_MANAGER_TIMEOUT, legacyMinutes
+    ).coerceIn(5, 240)
+    if (savedPolicy == null) {
+        Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, policy.name)
+        Settings.Secure.putInt(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT, minutes)
+    }
+    return IdleGlobalConfig(policy, minutes)
+}
+
 private fun readAppConfigs(ctx: Context): LinkedHashMap<String, IdleAppConfig> {
     val result = linkedMapOf<String, IdleAppConfig>()
     val json = Settings.Secure.getString(
@@ -211,8 +235,6 @@ private fun readAppConfigs(ctx: Context): LinkedHashMap<String, IdleAppConfig> {
         for (i in 0 until arr.length()) {
             val obj = arr.getJSONObject(i)
             val pkg = obj.getString("package")
-            val pol = IdlePolicy.fromString(obj.optString("policy", "BALANCED"))
-            val mins = obj.optInt("timeout_minutes", pol.defaultMinutes)
             val act = IdleAction.fromString(
                 obj.optString("action", IdleAction.STANDBY_BUCKET_RARE.name)
             )
@@ -221,8 +243,6 @@ private fun readAppConfigs(ctx: Context): LinkedHashMap<String, IdleAppConfig> {
                 label = pkg,
                 icon = null,
                 isSystem = false,
-                policy = pol,
-                customTimeoutMinutes = mins,
                 action = act
             )
         }
@@ -235,8 +255,6 @@ private fun writeAppConfigs(ctx: Context, configs: Map<String, IdleAppConfig>) {
     configs.values.forEach { c ->
         arr.put(JSONObject().apply {
             put("package", c.packageName)
-            put("policy", c.policy.name)
-            put("timeout_minutes", c.customTimeoutMinutes)
             put("action", c.action.name)
         })
     }
@@ -326,6 +344,8 @@ private fun IdleManagerRoot(ctx: Context) {
     var allApps by remember { mutableStateOf(listOf<IdleAppItem>()) }
     var configuredApps by remember { mutableStateOf(linkedMapOf<String, IdleAppConfig>()) }
     var globalEnabled by remember { mutableStateOf(true) }
+    var globalPolicy by remember { mutableStateOf(IdlePolicy.BALANCED) }
+    var globalCustomMinutes by remember { mutableIntStateOf(30) }
     var records by remember { mutableStateOf(listOf<EnforcementRecord>()) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -356,8 +376,11 @@ private fun IdleManagerRoot(ctx: Context) {
     fun loadAll() {
         scope.launch {
             val enabled = withContext(Dispatchers.IO) { readEnabled(ctx) }
+            val globalConfig = withContext(Dispatchers.IO) { readGlobalConfig(ctx) }
             val raw = withContext(Dispatchers.IO) { readAppConfigs(ctx) }
             globalEnabled = enabled
+            globalPolicy = globalConfig.policy
+            globalCustomMinutes = globalConfig.customMinutes
             configuredApps = mergeWithAppInfo(raw, allApps)
             refreshRecords()
         }
@@ -370,11 +393,29 @@ private fun IdleManagerRoot(ctx: Context) {
         }
     }
 
-    fun upsert(pkg: String, policy: IdlePolicy, mins: Int, action: IdleAction, app: IdleAppItem) {
+    fun upsert(pkg: String, action: IdleAction, app: IdleAppItem) {
         persist(linkedMapOf<String, IdleAppConfig>().apply {
             putAll(configuredApps)
-            put(pkg, IdleAppConfig(pkg, app.label, app.icon, app.isSystem, policy, mins, action))
+            put(pkg, IdleAppConfig(pkg, app.label, app.icon, app.isSystem, action))
         })
+    }
+
+    fun savePolicy(policy: IdlePolicy) {
+        globalPolicy = policy
+        scope.launch(Dispatchers.IO) {
+            Settings.Secure.putString(
+                ctx.contentResolver, Settings.Secure.IDLE_MANAGER_POLICY, policy.name
+            )
+        }
+    }
+
+    fun saveCustomMinutes(minutes: Int) {
+        globalCustomMinutes = minutes
+        scope.launch(Dispatchers.IO) {
+            Settings.Secure.putInt(
+                ctx.contentResolver, Settings.Secure.IDLE_MANAGER_TIMEOUT, minutes
+            )
+        }
     }
 
     fun remove(pkg: String) {
@@ -430,8 +471,15 @@ private fun IdleManagerRoot(ctx: Context) {
             onDismiss = {
                 showAddDialog = false
             },
-            onAppAdded = { app, policy, mins, action ->
-                upsert(app.packageName, policy, mins, action, app)
+            onAppsAdded = { apps, action ->
+                persist(linkedMapOf<String, IdleAppConfig>().apply {
+                    putAll(configuredApps)
+                    apps.forEach { app ->
+                        put(app.packageName, IdleAppConfig(
+                            app.packageName, app.label, app.icon, app.isSystem, action
+                        ))
+                    }
+                })
                 showAddDialog = false
             }
         )
@@ -443,9 +491,9 @@ private fun IdleManagerRoot(ctx: Context) {
             onDismiss = {
                 showEditDialog = null
             },
-            onSave = { policy, mins, action ->
+            onSave = { action ->
                 upsert(
-                    target.packageName, policy, mins, action,
+                    target.packageName, action,
                     IdleAppItem(target.packageName, target.label, target.icon, target.isSystem)
                 )
                 showEditDialog = null
@@ -562,6 +610,10 @@ private fun IdleManagerRoot(ctx: Context) {
                         when (tab) {
                             0 -> AppsTab(
                                 configuredApps = configuredApps,
+                                policy = globalPolicy,
+                                customMinutes = globalCustomMinutes,
+                                onPolicyChange = { savePolicy(it) },
+                                onCustomMinutesChange = { saveCustomMinutes(it) },
                                 onAdd = {
                                     showAddDialog = true
                                 },
@@ -596,6 +648,10 @@ private fun IdleManagerRoot(ctx: Context) {
 @Composable
 private fun AppsTab(
     configuredApps: LinkedHashMap<String, IdleAppConfig>,
+    policy: IdlePolicy,
+    customMinutes: Int,
+    onPolicyChange: (IdlePolicy) -> Unit,
+    onCustomMinutesChange: (Int) -> Unit,
     onAdd: () -> Unit,
     onClearAll: () -> Unit,
     onEdit: (IdleAppConfig) -> Unit,
@@ -608,6 +664,13 @@ private fun AppsTab(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
     ) {
+        GlobalPolicyCard(
+            policy = policy,
+            customMinutes = customMinutes,
+            onPolicyChange = onPolicyChange,
+            onCustomMinutesChange = onCustomMinutesChange
+        )
+
         Spacer(Modifier.height(12.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -972,7 +1035,6 @@ private fun AppConfigCard(
     }
 
     val isCritical = config.isSystem && CRITICAL_SYSTEM_PACKAGES.contains(config.packageName)
-    val policyColor = policyColor(config.policy)
     val actionColor = actionColor(config.action)
 
     if (showRemoveAlert) {
@@ -1090,20 +1152,6 @@ private fun AppConfigCard(
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(policyColor.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            policyLabel(config.policy, config.customTimeoutMinutes),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = policyColor,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(6.dp))
                             .background(actionColor.copy(alpha = 0.15f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
@@ -1167,21 +1215,6 @@ private fun AppConfigCard(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 ) {
                     Column(Modifier.padding(12.dp)) {
-                        DetailRow(
-                            stringResource(R.string.idle_manager_policy_label),
-                            policyLabel(config.policy, config.customTimeoutMinutes),
-                            policyColor
-                        )
-                        if (config.policy == IdlePolicy.CUSTOM) {
-                            DetailRow(
-                                stringResource(R.string.idle_manager_timeout_label),
-                                stringResource(
-                                    R.string.idle_manager_timeout_minutes,
-                                    config.customTimeoutMinutes
-                                ),
-                                policyColor
-                            )
-                        }
                         DetailRow(
                             stringResource(R.string.idle_manager_enforcement_action),
                             actionDisplayName(config.action),
@@ -1268,7 +1301,7 @@ private fun AddAppDialog(
     allApps: List<IdleAppItem>,
     configuredPackages: Set<String>,
     onDismiss: () -> Unit,
-    onAppAdded: (IdleAppItem, IdlePolicy, Int, IdleAction) -> Unit
+    onAppsAdded: (List<IdleAppItem>, IdleAction) -> Unit
 ) {
     var search by remember {
         mutableStateOf("")
@@ -1282,7 +1315,7 @@ private fun AddAppDialog(
     var selectedApps by remember {
         mutableStateOf(setOf<IdleAppItem>())
     }
-    var showPolicyStep by remember {
+    var showActionStep by remember {
         mutableStateOf(false)
     }
 
@@ -1304,14 +1337,14 @@ private fun AddAppDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (showPolicyStep) {
+                if (showActionStep) {
                     TextButton(onClick = {
-                        showPolicyStep = false
+                        showActionStep = false
                     }) {
                         Text(stringResource(R.string.idle_manager_back_to_apps))
                     }
                     Text(
-                        stringResource(R.string.idle_manager_select_policy),
+                        stringResource(R.string.idle_manager_enforcement_action),
                         style = MaterialTheme.typography.titleMedium
                     )
                 } else {
@@ -1342,7 +1375,7 @@ private fun AddAppDialog(
         },
         text = {
             Column(Modifier.fillMaxWidth().height(500.dp)) {
-                if (!showPolicyStep) {
+                if (!showActionStep) {
                     OutlinedTextField(
                         value = search,
                         onValueChange = { search = it },
@@ -1390,31 +1423,29 @@ private fun AddAppDialog(
                     if (selectedApps.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
                         Button(
-                            onClick = { showPolicyStep = true },
+                            onClick = { showActionStep = true },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
                                 stringResource(
-                                    R.string.idle_manager_select_policy_count,
+                                    R.string.idle_manager_select_action_count,
                                     selectedApps.size
                                 )
                             )
                         }
                     }
                 } else {
-                    PolicyAndActionSelector(
+                    ActionSelector(
                         modifier = Modifier.weight(1f),
-                        onConfirm = { policy, mins, action ->
-                            selectedApps.forEach { app ->
-                                onAppAdded(app, policy, mins, action)
-                            }
+                        onConfirm = { action ->
+                            onAppsAdded(selectedApps.toList(), action)
                         }
                     )
                 }
             }
         },
         confirmButton = {
-            if (!showPolicyStep) {
+            if (!showActionStep) {
                 TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.cancel))
                 }
@@ -1495,24 +1526,20 @@ private fun AppSelectRow(app: IdleAppItem, selected: Boolean, onClick: () -> Uni
 private fun EditAppDialog(
     config: IdleAppConfig,
     onDismiss: () -> Unit,
-    onSave: (IdlePolicy, Int, IdleAction) -> Unit
+    onSave: (IdleAction) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(stringResource(
-                R.string.idle_manager_edit_policy,
+                R.string.idle_manager_edit_action,
                 config.label)
             )
         },
         text = {
-            PolicyAndActionSelector(
-                initialPolicy = config.policy,
-                initialMinutes = config.customTimeoutMinutes,
+            ActionSelector(
                 initialAction = config.action,
-                onConfirm = {
-                    policy, mins, action -> onSave(policy, mins, action)
-                }
+                onConfirm = onSave
             )
         },
         confirmButton = {},
@@ -1525,28 +1552,18 @@ private fun EditAppDialog(
 }
 
 @Composable
-private fun PolicyAndActionSelector(
-    modifier: Modifier = Modifier,
-    initialPolicy: IdlePolicy = IdlePolicy.BALANCED,
-    initialMinutes: Int = 60,
-    initialAction: IdleAction = IdleAction.STANDBY_BUCKET_RARE,
-    onConfirm: (IdlePolicy, Int, IdleAction) -> Unit
+private fun GlobalPolicyCard(
+    policy: IdlePolicy,
+    customMinutes: Int,
+    onPolicyChange: (IdlePolicy) -> Unit,
+    onCustomMinutesChange: (Int) -> Unit
 ) {
-    var selectedPolicy by
-    remember {
-        mutableStateOf(initialPolicy)
-    }
-    var customMinutes  by
-    remember {
-        mutableFloatStateOf(initialMinutes.toFloat().coerceIn(5f, 240f))
-    }
-    var selectedAction by
-    remember {
-        mutableStateOf(initialAction)
+    var sliderMinutes by remember(customMinutes) {
+        mutableFloatStateOf(customMinutes.toFloat().coerceIn(5f, 240f))
     }
 
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
@@ -1559,10 +1576,8 @@ private fun PolicyAndActionSelector(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IdlePolicy.entries.forEach { pol ->
                 FilterChip(
-                    selected = selectedPolicy == pol,
-                    onClick = {
-                        selectedPolicy = pol
-                    },
+                    selected = policy == pol,
+                    onClick = { onPolicyChange(pol) },
                     label = {
                         Text(
                             policyDisplayName(pol),
@@ -1575,7 +1590,7 @@ private fun PolicyAndActionSelector(
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
                     ),
-                    leadingIcon = if (selectedPolicy == pol) {
+                    leadingIcon = if (policy == pol) {
                         {
                             Icon(Icons.Default.Check, null, Modifier.size(16.dp))
                         }
@@ -1585,7 +1600,7 @@ private fun PolicyAndActionSelector(
         }
 
         AnimatedVisibility(
-            visible = selectedPolicy == IdlePolicy.CUSTOM,
+            visible = policy == IdlePolicy.CUSTOM,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
@@ -1604,7 +1619,7 @@ private fun PolicyAndActionSelector(
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Text(
-                            formatMinutes(customMinutes.toInt()),
+                            formatMinutes(sliderMinutes.toInt()),
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1613,8 +1628,11 @@ private fun PolicyAndActionSelector(
                     }
                 }
                 Slider(
-                    value = customMinutes,
-                    onValueChange = { customMinutes = it },
+                    value = sliderMinutes,
+                    onValueChange = { sliderMinutes = it },
+                    onValueChangeFinished = {
+                        onCustomMinutesChange(sliderMinutes.toInt())
+                    },
                     valueRange = 5f..240f,
                     steps = 46,
                     modifier = Modifier.fillMaxWidth()
@@ -1642,7 +1660,7 @@ private fun PolicyAndActionSelector(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ) {
             Text(
-                text = when (selectedPolicy) {
+                text = when (policy) {
                     IdlePolicy.BALANCED   ->
                         stringResource(R.string.idle_manager_policy_balanced_desc)
                     IdlePolicy.AGGRESSIVE ->
@@ -1650,7 +1668,7 @@ private fun PolicyAndActionSelector(
                     IdlePolicy.CUSTOM     ->
                         stringResource(
                             R.string.idle_manager_policy_custom_desc_dynamic,
-                            customMinutes.toInt()
+                            sliderMinutes.toInt()
                         )
                 },
                 modifier = Modifier.padding(10.dp),
@@ -1659,34 +1677,29 @@ private fun PolicyAndActionSelector(
             )
         }
 
-        Text(
-            stringResource(R.string.idle_manager_enforcement_action),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
-        )
+    }
+}
 
+@Composable
+private fun ActionSelector(
+    modifier: Modifier = Modifier,
+    initialAction: IdleAction = IdleAction.STANDBY_BUCKET_RARE,
+    onConfirm: (IdleAction) -> Unit
+) {
+    var selectedAction by remember { mutableStateOf(initialAction) }
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         IdleAction.entries.forEach { action ->
             ActionOptionCard(
                 action = action,
                 selected = selectedAction == action,
-                onClick = {
-                    selectedAction = action
-                }
+                onClick = { selectedAction = action }
             )
         }
-
-        Spacer(Modifier.height(4.dp))
-
         Button(
-            onClick = {
-                val mins = when (selectedPolicy) {
-                    IdlePolicy.BALANCED -> 60
-                    IdlePolicy.AGGRESSIVE -> 15
-                    IdlePolicy.CUSTOM -> customMinutes.toInt()
-                }
-                onConfirm(selectedPolicy, mins, selectedAction)
-            },
+            onClick = { onConfirm(selectedAction) },
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Default.Check, null, Modifier.size(18.dp))
@@ -1752,13 +1765,6 @@ private fun ActionOptionCard(action: IdleAction, selected: Boolean, onClick: () 
 }
 
 @Composable
-private fun policyColor(policy: IdlePolicy): Color = when (policy) {
-    IdlePolicy.BALANCED -> MaterialTheme.colorScheme.tertiary
-    IdlePolicy.AGGRESSIVE -> MaterialTheme.colorScheme.error
-    IdlePolicy.CUSTOM -> MaterialTheme.colorScheme.primary
-}
-
-@Composable
 private fun actionColor(action: IdleAction): Color = when (action) {
     IdleAction.STANDBY_BUCKET_RARE -> MaterialTheme.colorScheme.tertiary
     IdleAction.STANDBY_BUCKET_RESTRICTED -> MaterialTheme.colorScheme.secondary
@@ -1787,12 +1793,6 @@ private fun actionDescription(action: IdleAction): String = when (action) {
     IdleAction.STANDBY_BUCKET_RESTRICTED -> stringResource(R.string.idle_action_restricted_desc)
     IdleAction.KILL_BACKGROUND -> stringResource(R.string.idle_action_kill_bg_desc)
     IdleAction.FULL_KILL -> stringResource(R.string.idle_action_full_kill_desc)
-}
-
-private fun policyLabel(policy: IdlePolicy, customMinutes: Int): String = when (policy) {
-    IdlePolicy.BALANCED -> "60 min"
-    IdlePolicy.AGGRESSIVE -> "15 min"
-    IdlePolicy.CUSTOM -> "$customMinutes min"
 }
 
 private fun formatMinutes(mins: Int): String = when {

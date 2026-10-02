@@ -17,7 +17,9 @@
     <string name="idle_manager_back_to_apps">← Back</string>
     <string name="idle_manager_select_policy">Set policy</string>
     <string name="idle_manager_select_policy_count">Next: set policy for %1$d app(s)</string>
+    <string name="idle_manager_select_action_count">Next: choose action for %1$d app(s)</string>
     <string name="idle_manager_edit_policy">Edit: %1$s</string>
+    <string name="idle_manager_edit_action">Action for %1$s</string>
     <string name="idle_manager_idle_timeout">Idle timeout</string>
     <string name="idle_manager_policy_balanced">Balanced</string>
     <string name="idle_manager_policy_aggressive">Aggressive</string>

@@ -65,9 +65,11 @@ public class LunarisIdleManager {
     private static final String TAG = "LunarisIdleManager";
 
     private static final String ACTION_SCAN = "com.android.systemui.lunaris.ACTION_IDLE_SCAN";
+    private static final String SYSTEMUI_PERMISSION = "com.android.systemui.permission.SELF";
     private static final int PI_SCAN_REQUEST = 0x4C494D01;
 
-    public static final long IDLE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(15);
+    private static final int MIN_CUSTOM_TIMEOUT_MINUTES = 5;
+    private static final int MAX_CUSTOM_TIMEOUT_MINUTES = 240;
 
     private static final long MIN_DELAY_MS = 100L;
     private static final long INITIAL_SCAN_DELAY_MS = TimeUnit.SECONDS.toMillis(30);
@@ -188,6 +190,7 @@ public class LunarisIdleManager {
     private final Executor mIoExecutor;
 
     private volatile boolean mEnabled = true;
+    private volatile long mIdleTimeoutMs = TimeUnit.MINUTES.toMillis(60);
     private volatile boolean mDestroyed = false;
     private volatile Map<String, AppConfig> mAppConfigCache = Collections.emptyMap();
 
@@ -262,7 +265,8 @@ public class LunarisIdleManager {
         Log.d(TAG, "executeManager: appCount=" + mAppConfigCache.size()
                 + " enabled=" + mEnabled);
 
-        Log.d(TAG, "First scan in 30 sec; final scan after 15 min");
+        Log.d(TAG, "First scan in 30 sec; final scan after "
+                + TimeUnit.MILLISECONDS.toMinutes(mIdleTimeoutMs) + " min");
         scheduleScanAlarm(INITIAL_SCAN_DELAY_MS);
     }
 
@@ -399,10 +403,13 @@ public class LunarisIdleManager {
     }
 
     private void scheduleScanAlarm(long delayMs) {
-        if (mAlarmManager == null) return;
+        if (mAlarmManager == null) {
+            Log.e(TAG, "Cannot schedule scan: AlarmManager unavailable");
+            return;
+        }
         PendingIntent pi = PendingIntent.getBroadcast(
                 mContext, PI_SCAN_REQUEST,
-                new Intent(ACTION_SCAN),
+                new Intent(ACTION_SCAN).setPackage(mContext.getPackageName()),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         long triggerAt = SystemClock.elapsedRealtime() + Math.max(delayMs, MIN_DELAY_MS);
         mAlarmManager.setExactAndAllowWhileIdle(
@@ -414,7 +421,7 @@ public class LunarisIdleManager {
         if (mAlarmManager == null) return;
         PendingIntent pi = PendingIntent.getBroadcast(
                 mContext, PI_SCAN_REQUEST,
-                new Intent(ACTION_SCAN),
+                new Intent(ACTION_SCAN).setPackage(mContext.getPackageName()),
                 PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
         if (pi != null) mAlarmManager.cancel(pi);
     }
@@ -426,14 +433,15 @@ public class LunarisIdleManager {
                 if (intent == null) return;
                 String action = intent.getAction();
                 if (ACTION_SCAN.equals(action)) {
+                    Log.d(TAG, "Scan alarm delivered");
                     onScanAlarmFired();
                 }
             }
         };
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_SCAN);
-        mContext.registerReceiver(mAlarmReceiver, filter,
-                Context.RECEIVER_NOT_EXPORTED);
+        mContext.registerReceiver(mAlarmReceiver, filter, SYSTEMUI_PERMISSION,
+                null, Context.RECEIVER_EXPORTED_UNAUDITED);
     }
 
     private void unregisterAlarmReceiver() {
@@ -445,7 +453,11 @@ public class LunarisIdleManager {
     }
 
     private void onScanAlarmFired() {
-        if (!mIsRunning || mDestroyed) return;
+        if (!mIsRunning || mDestroyed) {
+            Log.d(TAG, "Scan alarm ignored: running=" + mIsRunning
+                    + " destroyed=" + mDestroyed);
+            return;
+        }
         int cycle = mCycleGeneration;
         acquireWakeLock();
         mIoExecutor.execute(() -> {
@@ -455,7 +467,7 @@ public class LunarisIdleManager {
                 if (!mIsRunning || cycle != mCycleGeneration) return;
                 if (++mScansCompleted == 1) {
                     long elapsed = SystemClock.elapsedRealtime() - mCycleStartedElapsedMs;
-                    long remaining = IDLE_TIMEOUT_MS + FINAL_SCAN_MARGIN_MS - elapsed;
+                    long remaining = mIdleTimeoutMs + FINAL_SCAN_MARGIN_MS - elapsed;
                     scheduleScanAlarm(remaining);
                 } else {
                     mIsRunning = false;
@@ -504,18 +516,19 @@ public class LunarisIdleManager {
                 continue;
             }
 
-            if (foregroundPkgs.contains(pkg)) {
-                Log.v(TAG, "Skipping foreground: " + pkg);
+            if (cfg.action != IdleAction.FULL_KILL && foregroundPkgs.contains(pkg)) {
+                Log.d(TAG, "Skipping foreground: " + pkg);
                 continue;
             }
 
-            if (audioActive && isActiveMediaApp(pkg, processes)) {
-                Log.v(TAG, "Skipping active media: " + pkg);
+            if (cfg.action != IdleAction.FULL_KILL
+                    && audioActive && isActiveMediaApp(pkg, processes)) {
+                Log.d(TAG, "Skipping active media: " + pkg);
                 continue;
             }
 
             if (!isAppIdleLongEnough(pkg, now)) {
-                Log.v(TAG, "Not idle long enough: " + pkg);
+                Log.d(TAG, "Not idle long enough: " + pkg);
                 continue;
             }
 
@@ -581,7 +594,7 @@ public class LunarisIdleManager {
 
     private boolean killBackground(String pkg, long now) {
         Long lastKill = mLastKillTime.get(pkg);
-        if (lastKill != null && (now - lastKill) < IDLE_TIMEOUT_MS) {
+        if (lastKill != null && (now - lastKill) < mIdleTimeoutMs) {
             return false;
         }
         try {
@@ -597,7 +610,7 @@ public class LunarisIdleManager {
 
     private boolean forceStop(String pkg, long now) {
         Long lastKill = mLastKillTime.get(pkg);
-        if (lastKill != null && (now - lastKill) < IDLE_TIMEOUT_MS) {
+        if (lastKill != null && (now - lastKill) < mIdleTimeoutMs) {
             return false;
         }
 
@@ -780,7 +793,7 @@ public class LunarisIdleManager {
 
     private boolean isAppIdleLongEnough(String pkg, long now) {
         try {
-            long begin = now - IDLE_TIMEOUT_MS;
+            long begin = now - mIdleTimeoutMs;
             Map<String, UsageStats> stats =
                     mUsageStatsManager.queryAndAggregateUsageStats(begin, now);
 
@@ -802,14 +815,14 @@ public class LunarisIdleManager {
             Log.v(TAG, pkg + ": idle for "
                     + TimeUnit.MILLISECONDS.toMinutes(idleDuration)
                     + " min (threshold="
-                    + TimeUnit.MILLISECONDS.toMinutes(IDLE_TIMEOUT_MS) + " min)");
+                    + TimeUnit.MILLISECONDS.toMinutes(mIdleTimeoutMs) + " min)");
 
-            return idleDuration >= IDLE_TIMEOUT_MS;
+            return idleDuration >= mIdleTimeoutMs;
 
         } catch (Exception e) {
             Log.w(TAG, "UsageStats query failed for " + pkg + ": " + e.getMessage());
             Long lastKill = mLastKillTime.get(pkg);
-            return lastKill == null || (now - lastKill) >= IDLE_TIMEOUT_MS;
+            return lastKill == null || (now - lastKill) >= mIdleTimeoutMs;
         }
     }
 
@@ -871,6 +884,55 @@ public class LunarisIdleManager {
         return false;
     }
 
+    private void loadGlobalTimeout(ContentResolver cr, @Nullable String appsJson) {
+        String policy = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_POLICY);
+        String legacyPolicy = null;
+        int legacyMinutes = 30;
+        if (policy == null && appsJson != null) {
+            try {
+                JSONArray apps = new JSONArray(appsJson);
+                if (apps.length() > 0) {
+                    JSONObject first = apps.getJSONObject(0);
+                    legacyPolicy = first.optString("policy", "BALANCED");
+                    legacyMinutes = first.optInt("timeout_minutes", 30);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Unable to migrate legacy app timeout", e);
+            }
+        }
+        if (policy == null) {
+            policy = legacyPolicy == null ? "BALANCED" : legacyPolicy;
+            Settings.Secure.putString(cr, Settings.Secure.IDLE_MANAGER_POLICY, policy);
+            if (Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT) == null) {
+                Settings.Secure.putInt(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT,
+                        Math.max(MIN_CUSTOM_TIMEOUT_MINUTES,
+                                Math.min(MAX_CUSTOM_TIMEOUT_MINUTES, legacyMinutes)));
+            }
+        }
+
+        int minutes;
+        switch (policy) {
+            case "AGGRESSIVE":
+                minutes = 15;
+                break;
+            case "CUSTOM":
+                String saved = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_TIMEOUT);
+                try {
+                    minutes = saved == null ? legacyMinutes : Integer.parseInt(saved);
+                } catch (NumberFormatException e) {
+                    minutes = 30;
+                }
+                minutes = Math.max(MIN_CUSTOM_TIMEOUT_MINUTES,
+                        Math.min(MAX_CUSTOM_TIMEOUT_MINUTES, minutes));
+                break;
+            default:
+                minutes = 60;
+                break;
+        }
+        mIdleTimeoutMs = TimeUnit.MINUTES.toMillis(minutes);
+        Log.d(TAG, "Global timeout: policy=" + policy + " minutes=" + minutes);
+    }
+
     private void loadConfigFromSettings() {
         ContentResolver cr = mContext.getContentResolver();
         mEnabled = Settings.Secure.getInt(cr, Settings.Secure.IDLE_MANAGER, 1) == 1;
@@ -890,6 +952,7 @@ public class LunarisIdleManager {
 
         String appsJson = Settings.Secure.getString(cr, Settings.Secure.IDLE_MANAGER_APPS);
         Log.d(TAG, "loadConfigFromSettings: json=" + appsJson);
+        loadGlobalTimeout(cr, appsJson);
         Map<String, AppConfig> previous = mAppConfigCache;
         mAppConfigCache = parseAppConfigs(appsJson);
         for (String pkg : previous.keySet()) {
@@ -906,7 +969,13 @@ public class LunarisIdleManager {
             public void onChange(boolean selfChange, @Nullable Uri uri) {
                 Log.d(TAG, "Settings changed — refreshing config");
                 boolean wasEnabled = mEnabled;
+                long previousTimeoutMs = mIdleTimeoutMs;
                 loadConfigFromSettings();
+                if (mIsRunning && mScansCompleted == 1
+                        && previousTimeoutMs != mIdleTimeoutMs) {
+                    long elapsed = SystemClock.elapsedRealtime() - mCycleStartedElapsedMs;
+                    scheduleScanAlarm(mIdleTimeoutMs + FINAL_SCAN_MARGIN_MS - elapsed);
+                }
                 if (wasEnabled && !mEnabled) {
                     haltManager();
                 } else if (!wasEnabled && mEnabled && mPowerManager != null
@@ -918,7 +987,9 @@ public class LunarisIdleManager {
         };
         for (String key : new String[]{
                 Settings.Secure.IDLE_MANAGER,
-                Settings.Secure.IDLE_MANAGER_APPS}) {
+                Settings.Secure.IDLE_MANAGER_APPS,
+                Settings.Secure.IDLE_MANAGER_POLICY,
+                Settings.Secure.IDLE_MANAGER_TIMEOUT}) {
             cr.registerContentObserver(
                     Settings.Secure.getUriFor(key), false, mSettingsObserver);
         }
