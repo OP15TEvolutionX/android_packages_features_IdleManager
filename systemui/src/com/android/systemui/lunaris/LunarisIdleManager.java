@@ -527,7 +527,11 @@ public class LunarisIdleManager {
                 continue;
             }
 
-            if (!isAppIdleLongEnough(pkg, now)) {
+            // At the final screen-off scan, the lock timeout has elapsed. Background
+            // activity must not extend the grace period for a Full Kill target.
+            boolean finalFullKill = cfg.action == IdleAction.FULL_KILL
+                    && mScansCompleted > 0;
+            if (!finalFullKill && !isAppIdleLongEnough(pkg, now)) {
                 Log.d(TAG, "Not idle long enough: " + pkg);
                 continue;
             }
@@ -609,11 +613,8 @@ public class LunarisIdleManager {
     }
 
     private boolean forceStop(String pkg, long now) {
-        Long lastKill = mLastKillTime.get(pkg);
-        if (lastKill != null && (now - lastKill) < mIdleTimeoutMs) {
-            return false;
-        }
-
+        // The user may have reopened the app after an earlier stop. A previous
+        // enforcement must not prevent stopping this new session.
         return forceStopPackageNow(pkg, now);
     }
 
