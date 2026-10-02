@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">بەرنامەکە دەگوازێتەوە بۆ دۆخی ئامادەباشی دەگمەن. ڕێگری لە کارەکانی پاشبنەما و زەنگەکان دەکات. بەرنامەکە خۆکارانە دەستپێدەکاتەوە کاتێک دەکرێتەوە.</string>
     <string name="idle_action_restricted_desc">بەرنامەکە دەگوازێتەوە بۆ دۆخی ئامادەباشی سنووردارکراو. تەنها ڕێگە بە چەند کارێکی زۆر کەمی پاشبنەما دەدرێت.</string>
     <string name="idle_action_kill_bg_desc">پڕۆسەکانی پاشبنەما دەوەستێنێت.</string>
-    <string name="idle_action_full_kill_desc">دۆخی ئامادەباشی سنووردارکراو لەگەڵ داخستنی نەرم. زۆرترین هێزی جێبەجێکردن بۆ پاشەکەوتکردنی باتری.</string>
     <string name="idle_manager_kill_count_label">کۆی کردارەکان</string>
     <string name="idle_manager_last_killed_label">دوایین کردار</string>
     <string name="idle_manager_last_killed">دوایین: %1$s</string>

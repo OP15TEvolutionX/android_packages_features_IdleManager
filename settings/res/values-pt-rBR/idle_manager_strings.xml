@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Move o aplicativo para o modo de espera RARE. Bloqueia trabalhos e alarmes em segundo plano. Aplicativo restaura automaticamente quando aberto.</string>
     <string name="idle_action_restricted_desc">Move o aplicativo para o modo de espera RESTRITO. Muito poucas operações em segundo plano são permitidas.</string>
     <string name="idle_action_kill_bg_desc">Elimina suavemente processos em segundo plano em cache. O aplicativo pode reiniciar sozinho.</string>
-    <string name="idle_action_full_kill_desc">Espera RESTRITA combinada com soft-kill. Aplicação máxima para economia de bateria.</string>
     <string name="idle_manager_kill_count_label">Total de ações</string>
     <string name="idle_manager_last_killed_label">Última ação</string>
     <string name="idle_manager_last_killed">Último: %1$s</string>

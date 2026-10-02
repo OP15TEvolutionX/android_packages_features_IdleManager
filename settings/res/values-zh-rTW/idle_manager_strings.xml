@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">將應用程式移至「罕用」(RARE) 待機分組。封鎖背景工作與鬧鐘，開啟應用程式時會自動還原。</string>
     <string name="idle_action_restricted_desc">將應用程式移至「受限」(RESTRICTED) 待機分組。僅允許極少量的背景作業。</string>
     <string name="idle_action_kill_bg_desc">軟性結束快取的背景處理程序。應用程式可能會自行重新啟動。</string>
-    <string name="idle_action_full_kill_desc">「受限」待機分組加上軟性結束。最強力的省電執行手段。</string>
     <string name="idle_manager_kill_count_label">動作總數</string>
     <string name="idle_manager_last_killed_label">上次動作</string>
     <string name="idle_manager_last_killed">上次：%1$s</string>

@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Az alkalmazást RITKA készenléti állapotba helyezi. Blokkolja a háttérfeladatokat és a riasztásokat. Megnyitáskor az alkalmazás automatikusan helyreáll.</string>
     <string name="idle_action_restricted_desc">Az alkalmazást KORLÁTOZOTT készenléti állapotba helyezi. Csak nagyon kevés háttérművelet engedélyezett.</string>
     <string name="idle_action_kill_bg_desc">Kis agresszivitással állítja le a gyorsítótárazott háttérfolyamatokat. Az alkalmazás magától újraindulhat.</string>
-    <string name="idle_action_full_kill_desc">KORLÁTOZOTT készenléti állapot kíméletes leállítással kombinálva. Maximális korlátozás az energiatakarékosság érdekében.</string>
     <string name="idle_manager_kill_count_label">Az összes művelet</string>
     <string name="idle_manager_last_killed_label">A legutóbbi művelet</string>
     <string name="idle_manager_last_killed">Legutóbb kilőve: %1$s</string>

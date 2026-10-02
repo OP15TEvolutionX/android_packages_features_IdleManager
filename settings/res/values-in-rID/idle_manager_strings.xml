@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Memindahkan aplikasi ke mode siaga RARE. Memblokir tugas latar belakang dan alarm. Aplikasi akan kembali berjalan secara otomatis saat dibuka.</string>
     <string name="idle_action_restricted_desc">Memindahkan aplikasi ke mode siaga TERBATAS. Sangat sedikit operasi latar belakang yang diizinkan.</string>
     <string name="idle_action_kill_bg_desc">Menghentikan sementara proses latar belakang yang tersimpan dalam cache. Aplikasi mungkin akan memulai ulang dengan sendirinya.</string>
-    <string name="idle_action_full_kill_desc">Mode siaga TERBATAS dikombinasikan dengan pemutusan daya secara bertahap. Penegakan maksimal untuk penghematan baterai.</string>
     <string name="idle_manager_kill_count_label">Total tindakan</string>
     <string name="idle_manager_last_killed_label">Tindakan terakhir</string>
     <string name="idle_manager_last_killed">Terakhir: %1$s</string>

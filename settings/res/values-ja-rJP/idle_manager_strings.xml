@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">アプリを制限スタンバイに移動します。バックグラウンドジョブとアラームをブロックします。アプリを開くと自動的に復元されます。</string>
     <string name="idle_action_restricted_desc">アプリを制限されたスタンバイに移動します。バックグラウンド操作はほとんど許可されていません。</string>
     <string name="idle_action_kill_bg_desc">キャッシュされたバックグラウンドプロセスをソフトキルします。アプリが自動的に再起動する場合があります。</string>
-    <string name="idle_action_full_kill_desc">制限されたスタンバイとソフトキルの組み合わせ。バッテリー節約のための最大の執行。</string>
     <string name="idle_manager_kill_count_label">アクションの合計</string>
     <string name="idle_manager_last_killed_label">最後のアクション</string>
     <string name="idle_manager_last_killed">最後: %1$s</string>

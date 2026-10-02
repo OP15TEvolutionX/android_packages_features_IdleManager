@@ -19,6 +19,7 @@ package com.android.systemui.lunaris;
 import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
+import android.app.UidObserver;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.content.BroadcastReceiver;
@@ -26,6 +27,8 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -33,6 +36,8 @@ import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.RemoteException;
+import android.os.UserHandle;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.util.Log;
@@ -210,6 +215,7 @@ public class LunarisIdleManager {
     private BroadcastReceiver mAlarmReceiver;
     private BroadcastReceiver mDozeReceiver;
     private ContentObserver mSettingsObserver;
+    private UidObserver mUidObserver;
     private Runnable mHaltRunnable;
     private volatile boolean mIsRunning = false;
 
@@ -234,6 +240,8 @@ public class LunarisIdleManager {
         loadBucketStates();
         loadConfigFromSettings();
         if (!mEnabled && !mAppIdleStates.isEmpty()) restoreAllBuckets();
+        registerUidObserver();
+        reconcileFullKillPackages();
         registerSettingsObserver();
         registerBatteryReceiver();
         registerAlarmReceiver();
@@ -307,6 +315,7 @@ public class LunarisIdleManager {
         haltManager();
         mDestroyed = true;
         unregisterSettingsObserver();
+        unregisterUidObserver();
         unregisterBatteryReceiver();
         unregisterDozeReceiver();
         unregisterAlarmReceiver();
@@ -671,38 +680,96 @@ public class LunarisIdleManager {
             return false;
         }
 
-        boolean stopped = false;
+        return forceStopPackageNow(pkg, now);
+    }
 
+    private boolean forceStopPackageNow(String pkg, long now) {
         try {
-            java.lang.reflect.Method method = mActivityManager.getClass()
-                    .getMethod("forceStopPackage", String.class);
-            method.invoke(mActivityManager, pkg);
-            stopped = true;
-            Log.d(TAG, "Force stopped via reflection: " + pkg);
-        } catch (NoSuchMethodException e) {
-            Log.w(TAG, "forceStopPackage unavailable on this build — falling back: " + pkg);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            Log.w(TAG, "forceStopPackage threw for " + pkg + ": "
-                    + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
-        } catch (IllegalAccessException e) {
-            Log.w(TAG, "forceStopPackage access denied for " + pkg);
-        } catch (Exception e) {
-            Log.w(TAG, "forceStop unexpected error for " + pkg + ": " + e.getMessage());
-        }
-
-        try {
-            mActivityManager.killBackgroundProcesses(pkg);
-            stopped = true;
-            Log.d(TAG, "killBackgroundProcesses called: " + pkg);
-        } catch (Exception e) {
-            Log.w(TAG, "killBackgroundProcesses failed for " + pkg + ": " + e.getMessage());
-        }
-
-        if (stopped) {
+            mActivityManager.forceStopPackage(pkg);
             mLastKillTime.put(pkg, now);
+            Log.i(TAG, "Force stopped: " + pkg);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to force stop " + pkg, e);
+            return false;
         }
+    }
 
-        return stopped;
+    private void registerUidObserver() {
+        mUidObserver = new UidObserver() {
+            @Override
+            public void onUidGone(int uid, boolean disabled) {
+                if (UserHandle.getUserId(uid) != mContext.getUserId()) return;
+                mIoExecutor.execute(() -> handleUidGone(uid));
+            }
+        };
+        try {
+            ActivityManager.getService().registerUidObserver(mUidObserver,
+                    ActivityManager.UID_OBSERVER_GONE,
+                    ActivityManager.PROCESS_STATE_UNKNOWN, mContext.getOpPackageName());
+        } catch (RemoteException | SecurityException e) {
+            Log.e(TAG, "Unable to observe app process exits", e);
+            mUidObserver = null;
+        }
+    }
+
+    private void unregisterUidObserver() {
+        if (mUidObserver == null) return;
+        try {
+            ActivityManager.getService().unregisterUidObserver(mUidObserver);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Unable to unregister app process observer", e);
+        }
+        mUidObserver = null;
+    }
+
+    private void handleUidGone(int uid) {
+        if (mDestroyed || !mEnabled) return;
+        PackageManager pm = mContext.getPackageManager();
+        String[] packages = pm.getPackagesForUid(uid);
+        if (packages == null) return;
+        for (String pkg : packages) {
+            if (isFullKillTarget(pkg) && !isPackageStopped(pm, pkg)
+                    && forceStopPackageNow(pkg, System.currentTimeMillis())) {
+                updateKillStats(pkg, System.currentTimeMillis(), IdleAction.FULL_KILL);
+            }
+        }
+    }
+
+    private boolean isFullKillTarget(String pkg) {
+        AppConfig config = mAppConfigCache.get(pkg);
+        return config != null && config.action == IdleAction.FULL_KILL
+                && !LunarisIdleConstants.PROTECTED_PACKAGES.contains(pkg);
+    }
+
+    private boolean isPackageStopped(PackageManager pm, String pkg) {
+        try {
+            ApplicationInfo info = pm.getApplicationInfo(pkg, 0);
+            return info.isStopped();
+        } catch (PackageManager.NameNotFoundException e) {
+            return true;
+        }
+    }
+
+    private void reconcileFullKillPackages() {
+        mIoExecutor.execute(() -> {
+            if (mDestroyed || !mEnabled || mActivityManager == null) return;
+            List<ActivityManager.RunningAppProcessInfo> processes =
+                    mActivityManager.getRunningAppProcesses();
+            if (processes == null) return;
+            Set<String> running = new HashSet<>();
+            for (ActivityManager.RunningAppProcessInfo process : processes) {
+                if (process.pkgList != null) Collections.addAll(running, process.pkgList);
+            }
+            PackageManager pm = mContext.getPackageManager();
+            for (String pkg : mAppConfigCache.keySet()) {
+                if (isFullKillTarget(pkg) && !running.contains(pkg)
+                        && !isPackageStopped(pm, pkg)
+                        && forceStopPackageNow(pkg, System.currentTimeMillis())) {
+                    updateKillStats(pkg, System.currentTimeMillis(), IdleAction.FULL_KILL);
+                }
+            }
+        });
     }
 
     private void restoreBucket(String pkg) {
@@ -925,6 +992,7 @@ public class LunarisIdleManager {
                         && !mPowerManager.isInteractive()) {
                     executeManager();
                 }
+                if (mEnabled) reconcileFullKillPackages();
             }
         };
         for (String key : new String[]{

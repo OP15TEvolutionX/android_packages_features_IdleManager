@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Uygulamayı nadir kullanılanlar bekleme sistemine taşır. Arka plan işlerini ve alarmları engeller. Uygulama açıldığında otomatik olarak geri yüklenir.</string>
     <string name="idle_action_restricted_desc">Uygulamayı Kısıtlı moda taşır. Arka planda çok sınırlı işlem yapmasına izin verir.</string>
     <string name="idle_action_kill_bg_desc">Önbelleğe alınmış arka plan süreçlerini yumuşakça sonlandırır. Uygulama kendi kendine yeniden başlayabilir.</string>
-    <string name="idle_action_full_kill_desc">Kısıtlı bekleme modu ile yumuşak sonlandırma birleştirilir. Pil tasarrufu için maksimum zorlama uygulanır.</string>
     <string name="idle_manager_kill_count_label">Toplam işlem</string>
     <string name="idle_manager_last_killed_label">Son işlem</string>
     <string name="idle_manager_last_killed">Son: %1$s</string>

@@ -38,7 +38,6 @@
     <string name="idle_action_rare_bucket_desc">Chuyển ứng dụng sang nhóm chờ RARE. Chặn các tác vụ nền và báo thức. Ứng dụng sẽ tự động phục hồi khi được mở.</string>
     <string name="idle_action_restricted_desc">Chuyển ứng dụng sang nhóm chờ RESTRICTED. Nhóm mạnh mẽ nhất. Chỉ cho phép rất ít hoạt động nền.</string>
     <string name="idle_action_kill_bg_desc">Buộc dừng các tiến trình nền đã được lưu trong bộ nhớ đệm. Ứng dụng có thể tự khởi động lại.</string>
-    <string name="idle_action_full_kill_desc">Nhóm RESTRICTED + buộc dừng mềm. Cưỡng chế tối đa. Lý tưởng để tiết kiệm pin.</string>
     <string name="idle_manager_kill_count_label">Tổng số hành động</string>
     <string name="idle_manager_last_killed_label">Hành động cuối cùng</string>
     <string name="idle_manager_last_killed">Gần đây: %1$s</string>

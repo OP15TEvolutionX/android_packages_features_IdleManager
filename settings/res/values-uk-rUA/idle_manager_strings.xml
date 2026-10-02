@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Переміщує програму в режим очікування RARE. Всі блокує фонові завдання і сигнали будильника. Додаток автоматично відновлює роботу після відкриття.</string>
     <string name="idle_action_restricted_desc">Переводить програму в режим очікування з обмеженим режимом. Дозволено дуже мало фонових операцій.</string>
     <string name="idle_action_kill_bg_desc">Ваші програми, що кешовані в фоновому режимі. Додаток може перезапустити всі системні файли.</string>
-    <string name="idle_action_full_kill_desc">ОБМЕЖЕНИЙ режим очікування в поєднанні з м\'яким зупиненням. Максимальне забезпечення економії заряду батареї.</string>
     <string name="idle_manager_kill_count_label">Всі дії</string>
     <string name="idle_manager_last_killed_label">Останні дії</string>
     <string name="idle_manager_last_killed">Останній: %1$s</string>

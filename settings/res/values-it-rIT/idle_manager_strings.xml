@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Sposta l\'app nel bucket di standby RARO. Blocca i processi e le sveglie in background. L\'app viene ripristinata automaticamente quando viene aperta.</string>
     <string name="idle_action_restricted_desc">Sposta l\'app nel bucket di standby LIMITATO. Sono consentite pochissime operazioni in background.</string>
     <string name="idle_action_kill_bg_desc">Termina in modo leggero i processi in background memorizzati nella cache. L\'app potrebbe riavviarsi autonomamente.</string>
-    <string name="idle_action_full_kill_desc">Standby LIMITATO combinato con la terminazione leggera. Livello massimo di applicazione per risparmiare batteria.</string>
     <string name="idle_manager_kill_count_label">Azioni totali</string>
     <string name="idle_manager_last_killed_label">Ultima azione</string>
     <string name="idle_manager_last_killed">Ultima azione: %1$s</string>

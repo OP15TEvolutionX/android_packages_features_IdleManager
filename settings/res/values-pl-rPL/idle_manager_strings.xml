@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Przenosi aplikację do rzadkiego trybu gotowości. Blokuje zadania w tle i alarmy. Aplikacja zostaje automatycznie przywrócona po otwarciu.</string>
     <string name="idle_action_restricted_desc">Przenosi aplikację do ograniczonego trybu gotowości. Dozwolona jest bardzo mała liczba operacji w tle.</string>
     <string name="idle_action_kill_bg_desc">Łagodnie zamknięcie procesów w tle z pamięci podręcznej. Aplikacja może sama uruchomić się ponownie.</string>
-    <string name="idle_action_full_kill_desc">Ograniczony tryb gotowości połączony z łagodnym zamknięciem. Maksymalne wymuszanie dla oszczędzania baterii.</string>
     <string name="idle_manager_kill_count_label">Suma akcji</string>
     <string name="idle_manager_last_killed_label">Ostatnia akcja</string>
     <string name="idle_manager_last_killed">Ostatnia: %1$s</string>

@@ -37,7 +37,7 @@
     <string name="idle_action_rare_bucket_desc">Moves app to RARE standby. Blocks background jobs and alarms. App restores automatically when opened.</string>
     <string name="idle_action_restricted_desc">Moves app to RESTRICTED standby. Very few background operations are allowed.</string>
     <string name="idle_action_kill_bg_desc">Soft-kills cached background processes. App may restart on its own.</string>
-    <string name="idle_action_full_kill_desc">RESTRICTED standby combined with soft-kill. Maximum enforcement for battery savings.</string>
+    <string name="idle_action_full_kill_desc">Force-stops the app after its last process exits or an idle scan. It stays stopped until you open it again.</string>
     <string name="idle_manager_kill_count_label">Total actions</string>
     <string name="idle_manager_last_killed_label">Last action</string>
     <string name="idle_manager_last_killed">Last: %1$s</string>

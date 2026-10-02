@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">앱을 대기 모드(희귀 모드)로 전환합니다. 백그라운드 작업과 알람을 차단합니다. 앱을 열면 자동으로 복원됩니다.</string>
     <string name="idle_action_restricted_desc">앱을 제한적 대기 모드로 전환합니다. 백그라운드에서 실행되는 작업은 극히 제한적입니다.</string>
     <string name="idle_action_kill_bg_desc">캐시된 백그라운드 프로세스를 종료합니다. 앱이 자동으로 다시 시작될 수 있습니다.</string>
-    <string name="idle_action_full_kill_desc">대기 모드 제한 및 소프트 킬 기능 결합. 배터리 절약을 위한 최대 제어 기능.</string>
     <string name="idle_manager_kill_count_label">총 활동 수</string>
     <string name="idle_manager_last_killed_label">최근 작업</string>
     <string name="idle_manager_last_killed">마지막: %1$s</string>

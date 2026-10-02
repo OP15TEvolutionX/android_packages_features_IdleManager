@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">ينقل التطبيق إلى وضع الاستعداد RARE. يحظر المهام والتنبيهات في الخلفية. تتم استعادة التطبيق تلقائيًا عند فتحه.</string>
     <string name="idle_action_restricted_desc">ينقل التطبيق إلى وضع الاستعداد RESTRICTED. لا يُسمح إلا بعدد قليل جدًا من العمليات الخلفية.</string>
     <string name="idle_action_kill_bg_desc">ينهي عمليات الخلفية المخزنة مؤقتًا بشكل خفيف. قد يعيد التطبيق تشغيل نفسه.</string>
-    <string name="idle_action_full_kill_desc">وضع RESTRICTED مع إنهاء خفيف للعمليات. أقصى تطبيق للقواعد لتوفير البطارية.</string>
     <string name="idle_manager_kill_count_label">إجمالي الإجراءات</string>
     <string name="idle_manager_last_killed_label">آخر إجراء</string>
     <string name="idle_manager_last_killed">الأخير: %1$s</string>

@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">将应用移至极少使用待机状态。阻止后台作业和闹钟。打开应用时将自动恢复。</string>
     <string name="idle_action_restricted_desc">将应用移至受限待机状态。仅允许极少量的后台操作。</string>
     <string name="idle_action_kill_bg_desc">软结束后台缓存进程，应用后续可能自行恢复运行。</string>
-    <string name="idle_action_full_kill_desc">受限待机状态结合软杀机制。这是为了最大化节省电量而采取的最严格限制措施。</string>
     <string name="idle_manager_kill_count_label">总操作次数</string>
     <string name="idle_manager_last_killed_label">最后操作</string>
     <string name="idle_manager_last_killed">最后: %1$s</string>

@@ -37,7 +37,6 @@
     <string name="idle_action_rare_bucket_desc">Flyttar appen till väntelägesgruppen RARE. Blockerar bakgrundsjobb och alarm. Appen återställs automatiskt när den öppnas.</string>
     <string name="idle_action_restricted_desc">Flyttar appen till vänteläget RESTRICTED. Mycket få bakgrundsåtgärder tillåts.</string>
     <string name="idle_action_kill_bg_desc">Tvångsavslutar cachelagrade bakgrundsprocesser mjukt. Appen kan starta om av sig själv.</string>
-    <string name="idle_action_full_kill_desc">Vänteläget RESTRICTED kombinerat med mjuk avslutning. Maximal begränsning för att spara batteri.</string>
     <string name="idle_manager_kill_count_label">Totalt antal åtgärder</string>
     <string name="idle_manager_last_killed_label">Senaste åtgärd</string>
     <string name="idle_manager_last_killed">Senast: %1$s</string>
