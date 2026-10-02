@@ -1,0 +1,17 @@
+// Copyright (C) 2026 Evolution X
+// SPDX-License-Identifier: Apache-2.0
+
+filegroup {
+    name: "evolution-idle-manager-systemui-srcs",
+    srcs: [
+        "systemui/src/**/*.java",
+        "systemui/src/**/*.kt",
+    ],
+    visibility: ["//frameworks/base/packages/SystemUI:__pkg__"],
+}
+
+filegroup {
+    name: "evolution-idle-manager-settings-srcs",
+    srcs: ["settings/src/**/*.kt"],
+    visibility: ["//packages/apps/Settings:__pkg__"],
+}
