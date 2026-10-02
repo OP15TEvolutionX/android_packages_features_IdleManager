@@ -333,7 +333,9 @@ private fun IdleManagerRoot(ctx: Context) {
     var allApps by remember { mutableStateOf(listOf<IdleAppItem>()) }
     var configuredApps by remember { mutableStateOf(linkedMapOf<String, IdleAppConfig>()) }
     var globalEnabled by remember { mutableStateOf(true) }
-    var globalTimeoutMinutes by remember { mutableIntStateOf(60) }
+    // Wait for the saved value before composing the slider. Showing the default first
+    // makes its thumb jump when the asynchronous Settings.Secure read completes.
+    var globalTimeoutMinutes by remember { mutableStateOf<Int?>(null) }
     var records by remember { mutableStateOf(listOf<EnforcementRecord>()) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -580,24 +582,18 @@ private fun IdleManagerRoot(ctx: Context) {
                             }
                         }
                         when (tab) {
-                            0 -> AppsTab(
-                                configuredApps = configuredApps,
-                                timeoutMinutes = globalTimeoutMinutes,
-                                onTimeoutChange = { saveTimeoutMinutes(it) },
-                                onAdd = {
-                                    showAddDialog = true
-                                },
-                                onClearAll = {
-                                    showClearConfirm = true
-                                },
-                                onEdit = {
-                                    showEditDialog = it
-                                },
-                                onRemove = {
-                                    remove(it)
-                                },
-                                records = records
-                            )
+                            0 -> globalTimeoutMinutes?.let { timeoutMinutes ->
+                                AppsTab(
+                                    configuredApps = configuredApps,
+                                    timeoutMinutes = timeoutMinutes,
+                                    onTimeoutChange = { saveTimeoutMinutes(it) },
+                                    onAdd = { showAddDialog = true },
+                                    onClearAll = { showClearConfirm = true },
+                                    onEdit = { showEditDialog = it },
+                                    onRemove = { remove(it) },
+                                    records = records
+                                )
+                            }
                             1 -> DashboardTab(
                                 records = records,
                                 onRefresh = {
