@@ -18,6 +18,7 @@ package com.android.systemui.lunaris;
 
 import android.app.ActivityManager;
 import android.app.AlarmManager;
+import android.app.AppOpsManager;
 import android.app.PendingIntent;
 import android.app.UidObserver;
 import android.app.usage.UsageStats;
@@ -174,6 +175,16 @@ public class LunarisIdleManager {
         long restrictedAtMs = 0L;
     }
 
+    private static final class AppOpState {
+        final int uid;
+        final int originalMode;
+
+        AppOpState(int uid, int originalMode) {
+            this.uid = uid;
+            this.originalMode = originalMode;
+        }
+    }
+
     private static volatile LunarisIdleManager sInstance;
     private static final Object sLock = new Object();
 
@@ -181,6 +192,7 @@ public class LunarisIdleManager {
     private final Handler mMainHandler;
     private final ActivityManager mActivityManager;
     private final AlarmManager mAlarmManager;
+    private final AppOpsManager mAppOpsManager;
     private final AudioManager mAudioManager;
     private final UsageStatsManager mUsageStatsManager;
     private final PowerManager mPowerManager;
@@ -193,6 +205,7 @@ public class LunarisIdleManager {
     private volatile Map<String, AppConfig> mAppConfigCache = Collections.emptyMap();
 
     private final Map<String, AppIdleState> mAppIdleStates = new ConcurrentHashMap<>();
+    private final Map<String, AppOpState> mAppOpStates = new ConcurrentHashMap<>();
     private final Map<String, Long> mLastKillTime = new ConcurrentHashMap<>();
 
     private BroadcastReceiver mAlarmReceiver;
@@ -207,6 +220,7 @@ public class LunarisIdleManager {
         mMainHandler = new Handler(Looper.getMainLooper());
         mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
         mAlarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        mAppOpsManager = (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE);
         mAudioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
         mUsageStatsManager = (UsageStatsManager) mContext.getSystemService(Context.USAGE_STATS_SERVICE);
         mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
@@ -219,8 +233,11 @@ public class LunarisIdleManager {
         });
 
         loadBucketStates();
+        loadAppOpStates();
         loadConfigFromSettings();
-        if (!mEnabled && !mAppIdleStates.isEmpty()) restoreAllBuckets();
+        if (!mEnabled && (!mAppIdleStates.isEmpty() || !mAppOpStates.isEmpty())) {
+            restoreAllBuckets();
+        }
         registerUidObserver();
         reconcileFullKillPackages();
         registerSettingsObserver();
@@ -348,6 +365,7 @@ public class LunarisIdleManager {
         updated.remove(packageName);
         saveAppConfigs(updated);
         restoreBucket(packageName);
+        restoreAppOp(packageName);
         mAppIdleStates.remove(packageName);
         mLastKillTime.remove(packageName);
     }
@@ -560,6 +578,9 @@ public class LunarisIdleManager {
             }
 
             if (!mIsRunning || !canScan() || cycle != mCycleGeneration) return;
+            // Apply the background restriction before the selected action so a
+            // killed process cannot restart in the gap between the two calls.
+            boolean appOpApplied = applyBackgroundAppOp(pkg);
             boolean didAct = false;
 
             switch (cfg.action) {
@@ -584,7 +605,7 @@ public class LunarisIdleManager {
                     break;
             }
 
-            if (didAct) {
+            if (didAct || appOpApplied) {
                 updateKillStats(pkg, now, cfg.action);
             }
         }
@@ -754,6 +775,9 @@ public class LunarisIdleManager {
             for (String pkg : new HashSet<>(mAppIdleStates.keySet())) {
                 restoreBucket(pkg);
             }
+            for (String pkg : new HashSet<>(mAppOpStates.keySet())) {
+                restoreAppOp(pkg);
+            }
             Settings.Secure.putInt(
                     mContext.getContentResolver(),
                     Settings.Secure.IDLE_MANAGER_RESTORE_PENDING, 0);
@@ -796,6 +820,101 @@ public class LunarisIdleManager {
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to read standby bucket states", e);
+        }
+    }
+
+    private synchronized boolean applyBackgroundAppOp(String pkg) {
+        if (mAppOpsManager == null) return false;
+        try {
+            int uid = mContext.getPackageManager().getApplicationInfo(pkg, 0).uid;
+            AppOpState existing = mAppOpStates.get(pkg);
+            if (existing != null) {
+                if (existing.uid == uid && mAppOpsManager.unsafeCheckOpRawNoThrow(
+                        AppOpsManager.OP_RUN_ANY_IN_BACKGROUND, uid,
+                        pkg) == AppOpsManager.MODE_IGNORED) {
+                    return false;
+                }
+                // Another component changed the mode or the package was reinstalled.
+                mAppOpStates.remove(pkg);
+                persistAppOpStates();
+            }
+            int originalMode = AppOpsManager.MODE_DEFAULT;
+            for (AppOpsManager.PackageOps packageOps : mAppOpsManager.getOpsForPackage(
+                    uid, pkg, AppOpsManager.OPSTR_RUN_ANY_IN_BACKGROUND)) {
+                for (AppOpsManager.OpEntry op : packageOps.getOps()) {
+                    if (AppOpsManager.OPSTR_RUN_ANY_IN_BACKGROUND.equals(op.getOpStr())) {
+                        originalMode = op.getMode();
+                    }
+                }
+            }
+            if (originalMode == AppOpsManager.MODE_IGNORED) return false;
+
+            // Persist first so an interrupted SystemUI process can still restore it.
+            mAppOpStates.put(pkg, new AppOpState(uid, originalMode));
+            persistAppOpStates();
+            mAppOpsManager.setMode(AppOpsManager.OP_RUN_ANY_IN_BACKGROUND,
+                    uid, pkg, AppOpsManager.MODE_IGNORED);
+            Log.d(TAG, "Background AppOp restricted: " + pkg);
+            return true;
+        } catch (Exception e) {
+            // Keep recovery data if setMode succeeded before an exception.
+            Log.w(TAG, "Failed to restrict background AppOp for " + pkg, e);
+            return false;
+        }
+    }
+
+    private synchronized void restoreAppOp(String pkg) {
+        AppOpState state = mAppOpStates.get(pkg);
+        if (state == null || mAppOpsManager == null) return;
+        try {
+            int currentUid = mContext.getPackageManager().getApplicationInfo(pkg, 0).uid;
+            if (currentUid == state.uid && mAppOpsManager.unsafeCheckOpRawNoThrow(
+                    AppOpsManager.OP_RUN_ANY_IN_BACKGROUND, currentUid,
+                    pkg) == AppOpsManager.MODE_IGNORED) {
+                mAppOpsManager.setMode(AppOpsManager.OP_RUN_ANY_IN_BACKGROUND,
+                        currentUid, pkg, state.originalMode);
+            }
+            mAppOpStates.remove(pkg);
+            persistAppOpStates();
+            Log.d(TAG, "Background AppOp restored: " + pkg);
+        } catch (PackageManager.NameNotFoundException e) {
+            mAppOpStates.remove(pkg);
+            persistAppOpStates();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to restore background AppOp for " + pkg, e);
+        }
+    }
+
+    private synchronized void persistAppOpStates() {
+        JSONObject root = new JSONObject();
+        try {
+            for (Map.Entry<String, AppOpState> entry : mAppOpStates.entrySet()) {
+                JSONObject state = new JSONObject();
+                state.put("uid", entry.getValue().uid);
+                state.put("original", entry.getValue().originalMode);
+                root.put(entry.getKey(), state);
+            }
+            Settings.Secure.putString(mContext.getContentResolver(),
+                    Settings.Secure.IDLE_MANAGER_APP_OP_STATES, root.toString());
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to save background AppOp states", e);
+        }
+    }
+
+    private void loadAppOpStates() {
+        String json = Settings.Secure.getString(mContext.getContentResolver(),
+                Settings.Secure.IDLE_MANAGER_APP_OP_STATES);
+        if (json == null || json.isEmpty()) return;
+        try {
+            JSONObject root = new JSONObject(json);
+            for (java.util.Iterator<String> it = root.keys(); it.hasNext(); ) {
+                String pkg = it.next();
+                JSONObject state = root.getJSONObject(pkg);
+                mAppOpStates.put(pkg, new AppOpState(
+                        state.getInt("uid"), state.getInt("original")));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read background AppOp states", e);
         }
     }
 
@@ -964,6 +1083,9 @@ public class LunarisIdleManager {
                 for (String pkg : new HashSet<>(mAppIdleStates.keySet())) {
                     restoreBucket(pkg);
                 }
+                for (String pkg : new HashSet<>(mAppOpStates.keySet())) {
+                    restoreAppOp(pkg);
+                }
                 Settings.Secure.putInt(
                         cr, Settings.Secure.IDLE_MANAGER_RESTORE_PENDING, 0);
             });
@@ -975,7 +1097,14 @@ public class LunarisIdleManager {
         Map<String, AppConfig> previous = mAppConfigCache;
         mAppConfigCache = parseAppConfigs(appsJson);
         for (String pkg : previous.keySet()) {
-            if (!mAppConfigCache.containsKey(pkg)) restoreBucket(pkg);
+            if (!mAppConfigCache.containsKey(pkg)) {
+                restoreBucket(pkg);
+                restoreAppOp(pkg);
+            }
+        }
+        // Also recover removals made while SystemUI was not running.
+        for (String pkg : new HashSet<>(mAppOpStates.keySet())) {
+            if (!mAppConfigCache.containsKey(pkg)) restoreAppOp(pkg);
         }
         Log.d(TAG, "Config loaded — enabled=" + mEnabled
                 + ", apps=" + mAppConfigCache.size());
