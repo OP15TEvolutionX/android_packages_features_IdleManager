@@ -520,7 +520,7 @@ private fun IdleManagerRoot(ctx: Context) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            SpoofingHeaderCard(
+            ExpressiveHeaderCard(
                 title = stringResource(
                     if (globalEnabled) R.string.idle_manager_enabled_status
                     else R.string.idle_manager_disabled_status
@@ -544,7 +544,7 @@ private fun IdleManagerRoot(ctx: Context) {
                 )
             }
 
-            SpoofingAnimatedVisibility(visible = globalEnabled) {
+            ExpressiveAnimatedVisibility(visible = globalEnabled) {
                 Column {
                     Row(
                         modifier = Modifier
@@ -662,7 +662,7 @@ private fun AppsTab(
         Spacer(Modifier.height(16.dp))
 
         if (configuredApps.isEmpty()) {
-            SpoofingEmptyState(
+            ExpressiveEmptyState(
                 icon = Icons.Default.PowerSettingsNew,
                 title = stringResource(R.string.idle_manager_no_apps_configured),
                 description = stringResource(R.string.idle_manager_no_apps_hint),
@@ -818,7 +818,7 @@ private fun DashboardTab(
         Spacer(Modifier.height(8.dp))
 
         if (records.isEmpty()) {
-            SpoofingEmptyState(
+            ExpressiveEmptyState(
                 icon = Icons.Default.Shield,
                 title = stringResource(R.string.idle_manager_no_activity),
                 description = stringResource(R.string.idle_manager_no_activity_hint),
