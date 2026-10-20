@@ -1725,3 +1725,14 @@ private fun actionDescription(action: IdleAction): String = when (action) {
     IdleAction.KILL_BACKGROUND -> stringResource(R.string.idle_action_kill_bg_desc)
     IdleAction.FULL_KILL -> stringResource(R.string.idle_action_full_kill_desc)
 }
+
+
+@Composable
+private fun SectionLabel(text: String, includeBottomPadding: Boolean = true) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(bottom = if (includeBottomPadding) 8.dp else 0.dp),
+    )
+}
